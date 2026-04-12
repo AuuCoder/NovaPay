@@ -1,0 +1,159 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import {
+  formatDateTime,
+  formatMoney,
+  getPaymentStatusLabel,
+  getPaymentStatusTone,
+} from "@/app/admin/support";
+import { StatusBadge } from "@/app/admin/ui";
+import { getCurrentLocale } from "@/lib/i18n-server";
+import { getMerchantDisplayName } from "@/lib/merchant-profile-completion";
+import { getMerchantPaymentOrder } from "@/lib/orders/service";
+import { isTerminalPaymentStatus } from "@/lib/orders/status";
+import { getPrismaClient } from "@/lib/prisma";
+
+export default async function HostedPaymentReturnPage({
+  params,
+}: {
+  params: Promise<{ orderId: string }>;
+}) {
+  const locale = await getCurrentLocale();
+  const { orderId } = await params;
+  const prisma = getPrismaClient();
+  const orderSeed = await prisma.paymentOrder.findUnique({
+    where: {
+      id: orderId,
+    },
+    select: {
+      id: true,
+      status: true,
+      merchant: {
+        select: {
+          code: true,
+        },
+      },
+    },
+  });
+
+  if (!orderSeed) {
+    notFound();
+  }
+
+  const order = await (async () => {
+    try {
+      return await getMerchantPaymentOrder({
+        merchantCode: orderSeed.merchant.code,
+        orderReference: orderSeed.id,
+        syncWithProvider: !isTerminalPaymentStatus(orderSeed.status),
+      });
+    } catch {
+      return getMerchantPaymentOrder({
+        merchantCode: orderSeed.merchant.code,
+        orderReference: orderSeed.id,
+        syncWithProvider: false,
+      });
+    }
+  })();
+
+  const merchantName = getMerchantDisplayName(order.merchant.name, locale);
+  const content =
+    locale === "en"
+      ? {
+          title: "Payment Status",
+          description:
+            "NovaPay has received your browser return from the payment provider. This page shows the latest tracked order status.",
+          orderId: "Order ID",
+          merchant: "Merchant",
+          amount: "Amount",
+          updatedAt: "Last Updated",
+          paidAt: "Paid At",
+          pendingHint:
+            "If the payment has just been completed, the final result may take a short moment to synchronize.",
+          successHint: "The order payment has been confirmed successfully.",
+          failedHint:
+            "The payment is not completed yet or has been closed. You can return to the hosted cashier and try again if needed.",
+          refresh: "Refresh Status",
+          retry: "Return to Cashier",
+        }
+      : {
+          title: "支付结果",
+          description: "NovaPay 已接收到支付渠道的浏览器返回。本页展示当前订单的最新跟踪状态。",
+          orderId: "订单号",
+          merchant: "商户",
+          amount: "金额",
+          updatedAt: "最近更新",
+          paidAt: "支付时间",
+          pendingHint: "如果刚完成支付，最终结果可能还需要几秒钟同步，请稍后刷新查看。",
+          successHint: "当前订单已确认支付成功。",
+          failedHint: "当前支付尚未完成或已关闭，如有需要可返回收银台重新发起支付。",
+          refresh: "刷新状态",
+          retry: "返回收银台",
+        };
+
+  const hint =
+    order.status === "SUCCEEDED"
+      ? content.successHint
+      : order.status === "PENDING" || order.status === "PROCESSING"
+        ? content.pendingHint
+        : content.failedHint;
+
+  return (
+    <main className="min-h-screen bg-[linear-gradient(180deg,#fffaf3,#f6efe4)] px-4 py-10 sm:px-6">
+      <div className="mx-auto w-full max-w-3xl rounded-[2rem] border border-line bg-white/90 p-6 shadow-[0_24px_80px_rgba(79,46,17,0.12)] sm:p-8">
+        <p className="text-xs font-semibold uppercase tracking-[0.26em] text-secondary">NovaPay</p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight text-foreground">{content.title}</h1>
+        <p className="mt-3 text-sm leading-7 text-muted sm:text-base">{content.description}</p>
+
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <StatusBadge tone={getPaymentStatusTone(order.status)}>
+            {getPaymentStatusLabel(order.status, locale)}
+          </StatusBadge>
+          <span className="text-sm leading-6 text-muted">{hint}</span>
+        </div>
+
+        <section className="mt-8 grid gap-4 rounded-[1.5rem] border border-line bg-[#faf7f1] p-5 sm:grid-cols-2">
+          <div>
+            <p className="text-xs uppercase tracking-[0.22em] text-muted">{content.orderId}</p>
+            <p className="mt-2 break-all font-mono text-sm text-foreground">{order.externalOrderId}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.22em] text-muted">{content.merchant}</p>
+            <p className="mt-2 text-sm text-foreground">{merchantName}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.22em] text-muted">{content.amount}</p>
+            <p className="mt-2 text-2xl font-semibold text-foreground">
+              {formatMoney(order.amount.toString(), order.currency, locale)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.22em] text-muted">{content.updatedAt}</p>
+            <p className="mt-2 text-sm text-foreground">{formatDateTime(order.updatedAt, locale)}</p>
+          </div>
+          <div className="sm:col-span-2">
+            <p className="text-xs uppercase tracking-[0.22em] text-muted">{content.paidAt}</p>
+            <p className="mt-2 text-sm text-foreground">{formatDateTime(order.paidAt, locale)}</p>
+          </div>
+        </section>
+
+        <div className="mt-8 flex flex-wrap gap-3">
+          <Link
+            href={`/pay/${order.id}/return`}
+            className="inline-flex items-center justify-center rounded-2xl bg-foreground px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
+          >
+            {content.refresh}
+          </Link>
+          {(order.status === "PENDING" || order.status === "PROCESSING") && order.checkoutUrl ? (
+            <Link
+              href={`/pay/${order.id}`}
+              className="inline-flex items-center justify-center rounded-2xl border border-line bg-white px-4 py-2.5 text-sm font-medium text-foreground transition hover:border-accent hover:text-accent"
+            >
+              {content.retry}
+            </Link>
+          ) : null}
+        </div>
+      </div>
+    </main>
+  );
+}

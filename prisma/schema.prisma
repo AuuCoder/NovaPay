@@ -1,0 +1,514 @@
+generator client {
+  provider   = "prisma-client"
+  output     = "../generated/prisma"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentRefundStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+enum CallbackDeliveryStatus {
+  NOT_REQUIRED
+  PENDING
+  PROCESSING
+  DELIVERED
+  FAILED
+}
+
+enum CallbackAttemptStatus {
+  SUCCEEDED
+  FAILED
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  OPS_ADMIN
+  FINANCE_ADMIN
+  VIEWER
+}
+
+enum MerchantUserRole {
+  OWNER
+  OPS
+  DEVELOPER
+  VIEWER
+}
+
+enum MerchantStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum MerchantLedgerEntryType {
+  PAYMENT_CAPTURE
+  PAYMENT_FEE
+  REFUND
+  SETTLEMENT_PAYOUT
+  ADJUSTMENT
+}
+
+enum MerchantLedgerDirection {
+  CREDIT
+  DEBIT
+}
+
+enum MerchantSettlementStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+}
+
+enum IdempotencyStatus {
+  PROCESSING
+  SUCCEEDED
+  FAILED_FINAL
+  FAILED_RETRYABLE
+}
+
+model Merchant {
+  id                    String                 @id @default(cuid())
+  name                  String
+  code                  String                 @unique
+  status                MerchantStatus         @default(PENDING)
+  legalName             String?
+  contactName           String?
+  contactEmail          String?
+  contactPhone          String?
+  website               String?
+  companyRegistrationId String?
+  onboardingNote        String?                @db.Text
+  reviewNote            String?                @db.Text
+  approvedAt            DateTime?
+  approvedBy            String?
+  statusChangedAt       DateTime?
+  callbackBase          String?
+  notifySecret          String?
+  apiIpWhitelist        String?                @db.Text
+  callbackEnabled       Boolean                @default(true)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  paymentOrders         PaymentOrder[]
+  paymentRefunds        PaymentRefund[]
+  ledgerEntries         MerchantLedgerEntry[]
+  settlements           MerchantSettlement[]
+  balanceSnapshots      MerchantBalanceSnapshot[]
+  requestNonces         MerchantRequestNonce[]
+  channelBindings       MerchantChannelBinding[]
+  channelAccounts       MerchantChannelAccount[]
+  apiCredentials        MerchantApiCredential[]
+  users                 MerchantUser[]
+  idempotencyRecords    MerchantIdempotencyRecord[]
+
+  @@index([status, createdAt])
+  @@index([contactEmail])
+}
+
+model ProviderAccount {
+  id              String                 @id @default(cuid())
+  providerKey     String
+  channelCode     String
+  displayName     String
+  enabled         Boolean                @default(true)
+  priority        Int                    @default(0)
+  config          Json
+  limits          Json?
+  metadata        Json?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  paymentOrders   PaymentOrder[]
+  paymentRefunds  PaymentRefund[]
+  merchantBindings MerchantChannelBinding[]
+
+  @@index([providerKey, enabled])
+  @@index([channelCode, enabled, priority])
+}
+
+model MerchantChannelAccount {
+  id                String                 @id @default(cuid())
+  merchantId        String
+  merchant          Merchant               @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  providerKey       String
+  channelCode       String
+  displayName       String
+  config            Json
+  callbackToken     String                 @unique
+  enabled           Boolean                @default(true)
+  remark            String?                @db.Text
+  lastVerifiedAt    DateTime?
+  lastErrorMessage  String?                @db.Text
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  bindings          MerchantChannelBinding[]
+  paymentOrders     PaymentOrder[]
+  paymentRefunds    PaymentRefund[]
+
+  @@index([merchantId, channelCode, enabled])
+  @@index([merchantId, createdAt])
+}
+
+model MerchantChannelBinding {
+  id                String          @id @default(cuid())
+  merchantId        String
+  merchant          Merchant        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  channelCode       String
+  enabled           Boolean         @default(true)
+  providerAccountId String?
+  providerAccount   ProviderAccount? @relation(fields: [providerAccountId], references: [id], onDelete: SetNull)
+  merchantChannelAccountId String?
+  merchantChannelAccount   MerchantChannelAccount? @relation(fields: [merchantChannelAccountId], references: [id], onDelete: SetNull)
+  minAmount         Decimal?        @db.Decimal(18, 2)
+  maxAmount         Decimal?        @db.Decimal(18, 2)
+  feeRate           Decimal?        @db.Decimal(8, 4)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@unique([merchantId, channelCode])
+  @@index([channelCode, enabled])
+  @@index([merchantChannelAccountId])
+}
+
+model SystemConfig {
+  key       String   @id
+  value     String   @db.Text
+  group     String   @default("general")
+  label     String?
+  updatedAt DateTime @updatedAt
+
+  @@index([group])
+}
+
+model AdminAuditLog {
+  id           String   @id @default(cuid())
+  actor        String
+  action       String
+  resourceType String
+  resourceId   String?
+  summary      String
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([action, createdAt])
+  @@index([resourceType, createdAt])
+  @@index([createdAt])
+}
+
+model AdminUser {
+  id           String         @id @default(cuid())
+  email        String         @unique
+  name         String
+  passwordHash String
+  role         AdminRole
+  enabled      Boolean        @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  sessions     AdminSession[]
+
+  @@index([role, enabled])
+}
+
+model AdminSession {
+  id          String    @id @default(cuid())
+  adminUserId String
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  lastSeenAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([adminUserId, expiresAt])
+  @@index([expiresAt])
+}
+
+model MerchantApiCredential {
+  id               String       @id @default(cuid())
+  merchantId       String
+  merchant         Merchant     @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  label            String
+  keyId            String       @unique
+  secretCiphertext String
+  secretPreview    String
+  enabled          Boolean      @default(true)
+  expiresAt        DateTime?
+  lastUsedAt       DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  paymentOrders    PaymentOrder[]
+  paymentRefunds   PaymentRefund[]
+  requestNonces    MerchantRequestNonce[]
+  idempotencyRecords MerchantIdempotencyRecord[]
+
+  @@index([merchantId, enabled])
+  @@index([merchantId, createdAt])
+}
+
+model MerchantUser {
+  id           String           @id @default(cuid())
+  merchantId   String
+  merchant     Merchant         @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  email        String           @unique
+  name         String
+  passwordHash String
+  role         MerchantUserRole @default(OWNER)
+  enabled      Boolean          @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  sessions     MerchantSession[]
+
+  @@index([merchantId, enabled])
+  @@index([merchantId, role, enabled])
+}
+
+model MerchantSession {
+  id             String       @id @default(cuid())
+  merchantUserId String
+  merchantUser   MerchantUser @relation(fields: [merchantUserId], references: [id], onDelete: Cascade)
+  tokenHash      String       @unique
+  expiresAt      DateTime
+  lastSeenAt     DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([merchantUserId, expiresAt])
+  @@index([expiresAt])
+}
+
+model PaymentOrder {
+  id                   String                 @id @default(cuid())
+  merchantId           String
+  merchant             Merchant               @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+  channelCode          String
+  externalOrderId      String
+  providerAccountId    String?
+  providerAccount      ProviderAccount?       @relation(fields: [providerAccountId], references: [id], onDelete: SetNull)
+  merchantChannelAccountId String?
+  merchantChannelAccount   MerchantChannelAccount? @relation(fields: [merchantChannelAccountId], references: [id], onDelete: SetNull)
+  apiCredentialId      String?
+  apiCredential        MerchantApiCredential? @relation(fields: [apiCredentialId], references: [id], onDelete: SetNull)
+  subject              String
+  description          String?
+  amount               Decimal                @db.Decimal(18, 2)
+  feeRateSnapshot      Decimal                @default(0) @db.Decimal(8, 4)
+  feeAmount            Decimal                @default(0) @db.Decimal(18, 2)
+  netAmount            Decimal                @default(0) @db.Decimal(18, 2)
+  currency             String                 @default("CNY") @db.VarChar(3)
+  status               PaymentStatus          @default(PENDING)
+  gatewayOrderId       String?                @unique
+  providerStatus       String?
+  checkoutUrl          String?
+  callbackUrl          String?
+  returnUrl            String?
+  metadata             Json?
+  channelPayload       Json?
+  failureCode          String?
+  failureMessage       String?
+  callbackStatus       CallbackDeliveryStatus @default(NOT_REQUIRED)
+  callbackAttemptsCount Int                   @default(0)
+  callbackDeliveredAt  DateTime?
+  lastCallbackAt       DateTime?
+  nextCallbackAt       DateTime?
+  expireAt             DateTime?
+  paidAt               DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  callbackAttempts     PaymentCallbackAttempt[]
+  refunds              PaymentRefund[]
+  ledgerEntries        MerchantLedgerEntry[]
+
+  @@unique([merchantId, externalOrderId])
+  @@index([status, createdAt])
+  @@index([channelCode, createdAt])
+  @@index([providerAccountId, createdAt])
+  @@index([merchantChannelAccountId, createdAt])
+  @@index([apiCredentialId, createdAt])
+  @@index([callbackStatus, nextCallbackAt])
+}
+
+model PaymentRefund {
+  id                String                 @id @default(cuid())
+  merchantId        String
+  merchant          Merchant               @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+  paymentOrderId    String
+  paymentOrder      PaymentOrder           @relation(fields: [paymentOrderId], references: [id], onDelete: Restrict)
+  providerAccountId String?
+  providerAccount   ProviderAccount?       @relation(fields: [providerAccountId], references: [id], onDelete: SetNull)
+  merchantChannelAccountId String?
+  merchantChannelAccount   MerchantChannelAccount? @relation(fields: [merchantChannelAccountId], references: [id], onDelete: SetNull)
+  apiCredentialId   String?
+  apiCredential     MerchantApiCredential? @relation(fields: [apiCredentialId], references: [id], onDelete: SetNull)
+  externalRefundId  String
+  amount            Decimal                @db.Decimal(18, 2)
+  feeAmount         Decimal                @default(0) @db.Decimal(18, 2)
+  netAmountImpact   Decimal                @default(0) @db.Decimal(18, 2)
+  currency          String                 @default("CNY") @db.VarChar(3)
+  status            PaymentRefundStatus    @default(PENDING)
+  providerRefundId  String?
+  providerStatus    String?
+  reason            String?
+  metadata          Json?
+  failureCode       String?
+  failureMessage    String?
+  refundedAt        DateTime?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  ledgerEntries     MerchantLedgerEntry[]
+
+  @@unique([merchantId, externalRefundId])
+  @@index([paymentOrderId, createdAt])
+  @@index([status, createdAt])
+  @@index([providerAccountId, createdAt])
+  @@index([merchantChannelAccountId, createdAt])
+  @@index([apiCredentialId, createdAt])
+}
+
+model MerchantLedgerEntry {
+  id             String                 @id @default(cuid())
+  merchantId     String
+  merchant       Merchant               @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  paymentOrderId String?
+  paymentOrder   PaymentOrder?          @relation(fields: [paymentOrderId], references: [id], onDelete: SetNull)
+  paymentRefundId String?
+  paymentRefund  PaymentRefund?         @relation(fields: [paymentRefundId], references: [id], onDelete: SetNull)
+  settlementId   String?
+  settlement     MerchantSettlement?    @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+  type           MerchantLedgerEntryType
+  direction      MerchantLedgerDirection
+  amount         Decimal                @db.Decimal(18, 2)
+  currency       String                 @default("CNY") @db.VarChar(3)
+  description    String
+  externalKey    String                 @unique
+  metadata       Json?
+  occurredAt     DateTime
+  createdAt      DateTime               @default(now())
+
+  @@index([merchantId, occurredAt])
+  @@index([type, occurredAt])
+  @@index([paymentOrderId, occurredAt])
+  @@index([paymentRefundId, occurredAt])
+  @@index([settlementId, occurredAt])
+}
+
+model MerchantSettlement {
+  id               String                   @id @default(cuid())
+  merchantId       String
+  merchant         Merchant                 @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  settlementDate   DateTime
+  eligibleAt       DateTime
+  currency         String                   @default("CNY") @db.VarChar(3)
+  grossAmount      Decimal                  @default(0) @db.Decimal(18, 2)
+  refundAmount     Decimal                  @default(0) @db.Decimal(18, 2)
+  feeAmount        Decimal                  @default(0) @db.Decimal(18, 2)
+  adjustmentAmount Decimal                  @default(0) @db.Decimal(18, 2)
+  netAmount        Decimal                  @default(0) @db.Decimal(18, 2)
+  status           MerchantSettlementStatus @default(PENDING)
+  note             String?                  @db.Text
+  paidAt           DateTime?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  ledgerEntries    MerchantLedgerEntry[]
+
+  @@unique([merchantId, settlementDate, currency])
+  @@index([merchantId, settlementDate])
+  @@index([status, eligibleAt])
+}
+
+model MerchantBalanceSnapshot {
+  id             String   @id @default(cuid())
+  merchantId     String
+  merchant       Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  snapshotDate   DateTime
+  currency       String   @default("CNY") @db.VarChar(3)
+  openingBalance Decimal  @default(0) @db.Decimal(18, 2)
+  closingBalance Decimal  @default(0) @db.Decimal(18, 2)
+  totalCredit    Decimal  @default(0) @db.Decimal(18, 2)
+  totalDebit     Decimal  @default(0) @db.Decimal(18, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([merchantId, snapshotDate, currency])
+  @@index([merchantId, snapshotDate])
+}
+
+model MerchantRequestNonce {
+  id              String                 @id @default(cuid())
+  merchantId      String
+  merchant        Merchant               @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  apiCredentialId String
+  apiCredential   MerchantApiCredential  @relation(fields: [apiCredentialId], references: [id], onDelete: Cascade)
+  nonce           String
+  expiresAt       DateTime
+  createdAt       DateTime               @default(now())
+
+  @@unique([merchantId, nonce])
+  @@index([apiCredentialId, expiresAt])
+  @@index([expiresAt])
+}
+
+model MerchantIdempotencyRecord {
+  id              String                 @id @default(cuid())
+  merchantId      String
+  merchant        Merchant               @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  apiCredentialId String?
+  apiCredential   MerchantApiCredential? @relation(fields: [apiCredentialId], references: [id], onDelete: SetNull)
+  scope           String
+  idempotencyKey  String
+  requestHash     String
+  requestSummary  Json?
+  resourceType    String?
+  resourceId      String?
+  status          IdempotencyStatus      @default(PROCESSING)
+  httpStatus      Int?
+  responseBody    Json?
+  errorCode       String?
+  errorMessage    String?                @db.Text
+  replayCount     Int                    @default(0)
+  leaseExpiresAt  DateTime?
+  completedAt     DateTime?
+  expiresAt       DateTime
+  firstSeenAt     DateTime               @default(now())
+  lastSeenAt      DateTime               @default(now())
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@unique([merchantId, scope, idempotencyKey])
+  @@index([status, leaseExpiresAt])
+  @@index([merchantId, createdAt])
+  @@index([expiresAt])
+}
+
+model PaymentCallbackAttempt {
+  id            String               @id @default(cuid())
+  paymentOrderId String
+  paymentOrder  PaymentOrder         @relation(fields: [paymentOrderId], references: [id], onDelete: Cascade)
+  targetUrl     String
+  status        CallbackAttemptStatus
+  httpStatus    Int?
+  requestHeaders Json?
+  requestBody   Json?
+  responseBody  String?              @db.Text
+  errorMessage  String?              @db.Text
+  createdAt     DateTime             @default(now())
+  completedAt   DateTime?
+
+  @@index([paymentOrderId, createdAt])
+}
