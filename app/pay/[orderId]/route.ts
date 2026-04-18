@@ -3,6 +3,7 @@ import { PaymentStatus } from "@/generated/prisma/enums";
 import { getMerchantPaymentOrder } from "@/lib/orders/service";
 import { isTerminalPaymentStatus } from "@/lib/orders/status";
 import { isWxpayNativeChannelCode } from "@/lib/payments/channel-codes";
+import { buildHostedPaymentReturnUrl } from "@/lib/payments/hosted-pages";
 import { getPrismaClient } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -679,7 +680,7 @@ export async function GET(
 
   if (isWxpayNativeChannelCode(order.channelCode)) {
     if (isTerminalPaymentStatus(order.status)) {
-      return Response.redirect(new URL(`/pay/${order.id}/return`, request.url), 302);
+      return Response.redirect(buildHostedPaymentReturnUrl(order.id), 302);
     }
 
     const html = await renderWxpayCheckoutPage({
@@ -703,7 +704,7 @@ export async function GET(
 
   if (order.channelCode === "alipay.page") {
     if (isTerminalPaymentStatus(order.status)) {
-      return Response.redirect(new URL(`/pay/${order.id}/return`, request.url), 302);
+      return Response.redirect(buildHostedPaymentReturnUrl(order.id), 302);
     }
 
     const html = renderAlipayCheckoutPage({
