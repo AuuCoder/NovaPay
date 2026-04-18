@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import {
   formatDateTime,
   formatMoney,
@@ -55,6 +55,10 @@ export default async function HostedPaymentReturnPage({
       });
     }
   })();
+
+  if (order.status === "SUCCEEDED" && order.returnUrl?.trim()) {
+    redirect(order.returnUrl);
+  }
 
   const merchantName = getMerchantDisplayName(order.merchant.name, locale);
   const content =
