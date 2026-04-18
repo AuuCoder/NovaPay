@@ -2,6 +2,7 @@ import QRCode from "qrcode";
 import { PaymentStatus } from "@/generated/prisma/enums";
 import { getMerchantPaymentOrder } from "@/lib/orders/service";
 import { isTerminalPaymentStatus } from "@/lib/orders/status";
+import { isWxpayNativeChannelCode } from "@/lib/payments/channel-codes";
 import { getPrismaClient } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -660,10 +661,7 @@ export async function GET(
 
   let order = normalizeHostedOrder(orderSeed);
 
-  if (
-    (order.channelCode === "wxpay.native" || order.channelCode === "alipay.page") &&
-    !isTerminalPaymentStatus(order.status)
-  ) {
+  if ((isWxpayNativeChannelCode(order.channelCode) || order.channelCode === "alipay.page") && !isTerminalPaymentStatus(order.status)) {
     try {
       const synced = await getMerchantPaymentOrder({
         merchantCode: order.merchant.code,
@@ -679,7 +677,7 @@ export async function GET(
     return new Response("Checkout URL is not ready yet.", { status: 409 });
   }
 
-  if (order.channelCode === "wxpay.native") {
+  if (isWxpayNativeChannelCode(order.channelCode)) {
     if (isTerminalPaymentStatus(order.status)) {
       return Response.redirect(new URL(`/pay/${order.id}/return`, request.url), 302);
     }

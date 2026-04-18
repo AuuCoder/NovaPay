@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { Locale } from "@/lib/i18n";
 import { getPublicBaseUrl } from "@/lib/env";
+import { isWxpayNativeChannelCode } from "@/lib/payments/channel-codes";
 import { maskProviderConfigForDisplay } from "@/lib/provider-account-config";
 
 interface MerchantChannelFieldDefinition {
@@ -101,7 +102,7 @@ export function buildMerchantChannelCallbackPath(channelCode: string, accountId:
     return `/api/payments/callback/alipay/${accountId}/${token}`;
   }
 
-  if (channelCode === "wxpay.native") {
+  if (isWxpayNativeChannelCode(channelCode)) {
     return `/api/payments/callback/wxpay/${accountId}/${token}`;
   }
 

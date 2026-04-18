@@ -1,5 +1,6 @@
 import { alipayPageProvider } from "@/lib/payments/providers/alipay-page";
 import { wxpayNativeProvider } from "@/lib/payments/providers/wxpay-native";
+import { normalizePaymentChannelCode } from "@/lib/payments/channel-codes";
 import type { PaymentChannelCode, PaymentProvider } from "@/lib/payments/types";
 
 const providers: Record<PaymentChannelCode, PaymentProvider> = {
@@ -8,7 +9,8 @@ const providers: Record<PaymentChannelCode, PaymentProvider> = {
 };
 
 export function getPaymentProvider(channelCode: string) {
-  return providers[channelCode as PaymentChannelCode];
+  const normalized = normalizePaymentChannelCode(channelCode);
+  return providers[normalized as PaymentChannelCode];
 }
 
 export function listPaymentChannels() {

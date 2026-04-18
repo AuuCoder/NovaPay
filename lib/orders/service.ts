@@ -5,6 +5,7 @@ import { AppError } from "@/lib/errors";
 import { calculatePaymentFeeSnapshot } from "@/lib/finance/calculations";
 import { syncPaymentOrderLedgerEntries } from "@/lib/finance/ledger";
 import { getMerchantProfileMissingFieldsForChannel } from "@/lib/merchant-profile-completion";
+import { normalizePaymentChannelCode } from "@/lib/payments/channel-codes";
 import { getPaymentProvider } from "@/lib/payments/registry";
 import {
   getPaymentRuntimeAccountBySelection,
@@ -300,7 +301,8 @@ export async function closeMerchantPaymentOrder(input: {
 
 export async function createPaymentOrder(input: CreatePaymentOrderInput) {
   const prisma = getPrismaClient();
-  const provider = getPaymentProvider(input.channelCode);
+  const normalizedChannelCode = normalizePaymentChannelCode(input.channelCode);
+  const provider = getPaymentProvider(normalizedChannelCode);
 
   if (!provider) {
     throw new AppError(
@@ -325,7 +327,7 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
   }
 
   assertMerchantCanCreateOrders(merchant);
-  assertMerchantProfileReadyForOrders(merchant, input.channelCode);
+  assertMerchantProfileReadyForOrders(merchant, normalizedChannelCode);
 
   const existingOrder = await prisma.paymentOrder.findUnique({
     where: {
@@ -337,7 +339,7 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
   });
 
   if (existingOrder) {
-    if (existingOrder.channelCode !== input.channelCode) {
+    if (existingOrder.channelCode !== normalizedChannelCode) {
       throw new AppError(
         "ORDER_CHANNEL_CONFLICT",
         `Order ${input.externalOrderId} already exists on channel ${existingOrder.channelCode}.`,
@@ -355,7 +357,7 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
 
   const route = await selectProviderAccountForOrder({
     merchantId: merchant.id,
-    channelCode: input.channelCode,
+    channelCode: normalizedChannelCode,
     amount: input.amount,
   });
   const providerAccount = route.account;
@@ -367,7 +369,7 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
   if (!provider.isConfigured(providerAccount)) {
     throw new AppError(
       "CHANNEL_NOT_CONFIGURED",
-      `Channel ${input.channelCode} is not configured for this merchant. Create and enable a merchant-owned channel instance first.`,
+      `Channel ${normalizedChannelCode} is not configured for this merchant. Create and enable a merchant-owned channel instance first.`,
       422,
     );
   }
@@ -378,7 +380,7 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
   const order = await prisma.paymentOrder.create({
     data: {
       merchantId: merchant.id,
-      channelCode: input.channelCode,
+      channelCode: normalizedChannelCode,
       externalOrderId: input.externalOrderId,
       providerAccountId: null,
       merchantChannelAccountId: providerAccount?.id ?? null,
