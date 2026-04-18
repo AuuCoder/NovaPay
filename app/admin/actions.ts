@@ -1,6 +1,6 @@
 "use server";
 
-import { AdminRole, MerchantStatus } from "@/generated/prisma/enums";
+import { AdminRole, MerchantStatus, MerchantUserRole } from "@/generated/prisma/enums";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
@@ -105,6 +105,40 @@ function parseMerchantStatus(text: string) {
   }
 
   throw new Error("商户状态不合法。");
+}
+
+function parseMerchantUserRole(text: string) {
+  if (text in MerchantUserRole) {
+    return text as MerchantUserRole;
+  }
+
+  throw new Error("商户用户角色不合法。");
+}
+
+function isPrismaUniqueConstraintError(error: unknown, targetField?: string) {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return false;
+  }
+
+  if (error.code !== "P2002") {
+    return false;
+  }
+
+  if (!targetField) {
+    return true;
+  }
+
+  if (!("meta" in error) || !error.meta || typeof error.meta !== "object") {
+    return false;
+  }
+
+  const metaTarget = "target" in error.meta ? error.meta.target : undefined;
+
+  if (Array.isArray(metaTarget)) {
+    return metaTarget.includes(targetField);
+  }
+
+  return typeof metaTarget === "string" && metaTarget.includes(targetField);
 }
 
 function resolveNotifySecretForStorage(input: {
@@ -219,7 +253,6 @@ export async function createMerchantAction(formData: FormData) {
         contactName: merchantProfile.contactName,
         contactEmail: getOptionalString(formData, "contactEmail"),
         contactPhone: merchantProfile.contactPhone,
-        website: getOptionalString(formData, "website"),
         companyRegistrationId: merchantProfile.companyRegistrationId,
         onboardingNote: getOptionalString(formData, "onboardingNote"),
         reviewNote: getOptionalString(formData, "reviewNote"),
@@ -296,7 +329,6 @@ export async function updateMerchantAction(formData: FormData) {
         contactName: getOptionalString(formData, "contactName"),
         contactEmail: getOptionalString(formData, "contactEmail"),
         contactPhone: getOptionalString(formData, "contactPhone"),
-        website: getOptionalString(formData, "website"),
         companyRegistrationId: getOptionalString(formData, "companyRegistrationId"),
         onboardingNote: getOptionalString(formData, "onboardingNote"),
         callbackBase: getOptionalString(formData, "callbackBase"),
@@ -329,6 +361,155 @@ export async function updateMerchantAction(formData: FormData) {
   }
 
   redirect(withMessage(redirectTo, "success", "商户配置已更新。"));
+}
+
+export async function createMerchantUserAction(formData: FormData) {
+  const session = await requireAdminPermission("merchant:write");
+  const redirectTo = getRedirectTo(formData, "/admin/merchants");
+
+  try {
+    const prisma = getPrismaClient();
+    const merchantId = getRequiredString(formData, "merchantId", "商户 ID");
+    const email = getRequiredString(formData, "email", "登录邮箱").toLowerCase();
+    const name = getRequiredString(formData, "name", "登录姓名");
+    const password = getRequiredString(formData, "password", "登录密码");
+    const confirmPassword = getRequiredString(formData, "confirmPassword", "确认密码");
+    const role = parseMerchantUserRole(getRequiredString(formData, "role", "账号角色"));
+    const enabled = getBoolean(formData, "enabled");
+
+    if (password.length < 8) {
+      throw new Error("登录密码至少需要 8 位。");
+    }
+
+    if (password !== confirmPassword) {
+      throw new Error("两次输入的密码不一致。");
+    }
+
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: {
+        id: true,
+        code: true,
+      },
+    });
+
+    if (!merchant) {
+      throw new Error("商户不存在。");
+    }
+
+    const merchantUser = await prisma.merchantUser.create({
+      data: {
+        merchantId,
+        email,
+        name,
+        passwordHash: await hashPassword(password),
+        role,
+        enabled,
+      },
+    });
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "merchant_user.create",
+      resourceType: "merchant_user",
+      resourceId: merchantUser.id,
+      summary: `为商户 ${merchant.code} 创建登录账号 ${email}。`,
+      metadata: {
+        merchantId,
+        merchantCode: merchant.code,
+        role,
+        enabled,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    if (isPrismaUniqueConstraintError(error, "email")) {
+      redirectWithError(redirectTo, new Error("该登录邮箱已经被其他商户账号使用。"));
+    }
+
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "商户登录账号已创建。"));
+}
+
+export async function updateMerchantUserAction(formData: FormData) {
+  const session = await requireAdminPermission("merchant:write");
+  const redirectTo = getRedirectTo(formData, "/admin/merchants");
+
+  try {
+    const prisma = getPrismaClient();
+    const id = getRequiredString(formData, "id", "商户用户 ID");
+    const merchantId = getRequiredString(formData, "merchantId", "商户 ID");
+    const email = getRequiredString(formData, "email", "登录邮箱").toLowerCase();
+    const name = getRequiredString(formData, "name", "登录姓名");
+    const password = getString(formData, "password");
+    const confirmPassword = getString(formData, "confirmPassword");
+    const role = parseMerchantUserRole(getRequiredString(formData, "role", "账号角色"));
+    const enabled = getBoolean(formData, "enabled");
+
+    if (password) {
+      if (password.length < 8) {
+        throw new Error("登录密码至少需要 8 位。");
+      }
+
+      if (password !== confirmPassword) {
+        throw new Error("两次输入的密码不一致。");
+      }
+    }
+
+    const existing = await prisma.merchantUser.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        merchantId: true,
+        merchant: {
+          select: {
+            code: true,
+          },
+        },
+      },
+    });
+
+    if (!existing || existing.merchantId !== merchantId) {
+      throw new Error("商户登录账号不存在。");
+    }
+
+    const merchantUser = await prisma.merchantUser.update({
+      where: { id },
+      data: {
+        email,
+        name,
+        role,
+        enabled,
+        ...(password ? { passwordHash: await hashPassword(password) } : {}),
+      },
+    });
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "merchant_user.update",
+      resourceType: "merchant_user",
+      resourceId: merchantUser.id,
+      summary: `更新商户 ${existing.merchant.code} 的登录账号 ${email}。`,
+      metadata: {
+        merchantId,
+        merchantCode: existing.merchant.code,
+        role,
+        enabled,
+        passwordRotated: Boolean(password),
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    if (isPrismaUniqueConstraintError(error, "email")) {
+      redirectWithError(redirectTo, new Error("该登录邮箱已经被其他商户账号使用。"));
+    }
+
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "商户登录账号已更新。"));
 }
 
 export async function reviewMerchantAction(formData: FormData) {

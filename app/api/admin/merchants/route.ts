@@ -106,7 +106,6 @@ export async function POST(request: Request) {
       contactName: merchantProfile.contactName,
       contactEmail: readOptionalString(body, "contactEmail"),
       contactPhone: merchantProfile.contactPhone,
-      website: readOptionalString(body, "website"),
       companyRegistrationId: merchantProfile.companyRegistrationId,
       onboardingNote: readOptionalString(body, "onboardingNote"),
       reviewNote: readOptionalString(body, "reviewNote"),

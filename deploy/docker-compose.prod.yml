@@ -1,0 +1,97 @@
+name: novapay
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${NOVAPAY_POSTGRES_DB:-novapay}
+      POSTGRES_USER: ${NOVAPAY_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${NOVAPAY_POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - novapay-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${NOVAPAY_POSTGRES_USER:-postgres} -d ${NOVAPAY_POSTGRES_DB:-novapay}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run db:migrate:deploy
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    profiles: ["ops"]
+
+  preflight:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run env:check:prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    profiles: ["ops"]
+
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run start
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000/api/health').then((response)=>process.exit(response.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  callbacks-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run callbacks:worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  finance-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run finance:worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  novapay-postgres-data:

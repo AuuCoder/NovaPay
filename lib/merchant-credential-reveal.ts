@@ -5,10 +5,11 @@ const MERCHANT_CREDENTIAL_REVEAL_COOKIE = "novapay_merchant_credential_reveal";
 const MERCHANT_CREDENTIAL_REVEAL_MAX_AGE_SECONDS = 60 * 10;
 
 interface MerchantCredentialRevealPayload {
+  credentialId?: string;
   keyId: string;
   secret: string;
   label: string;
-  source: "bootstrap" | "manual";
+  source: "bootstrap" | "manual" | "reauth";
 }
 
 function getCookieOptions(maxAge: number) {
@@ -45,7 +46,9 @@ export async function readMerchantCredentialReveal() {
       typeof parsed.keyId !== "string" ||
       typeof parsed.secret !== "string" ||
       typeof parsed.label !== "string" ||
-      (parsed.source !== "bootstrap" && parsed.source !== "manual")
+      (parsed.source !== "bootstrap" &&
+        parsed.source !== "manual" &&
+        parsed.source !== "reauth")
     ) {
       return null;
     }

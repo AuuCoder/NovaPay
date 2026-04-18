@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { logoutMerchantAction } from "@/app/merchant/actions";
 import { MerchantNav, type MerchantNavItem } from "@/app/merchant/nav";
 import { getCurrentLocale } from "@/lib/i18n-server";
-import { getMerchantDisplayName, isMerchantProfileComplete } from "@/lib/merchant-profile-completion";
+import { getMerchantWorkspaceName } from "@/lib/merchant-profile-completion";
 import { hasMerchantPermission } from "@/lib/merchant-rbac";
 import { getMerchantDisplayRole, requireMerchantSession } from "@/lib/merchant-session";
 
@@ -14,18 +14,26 @@ export default async function MerchantConsoleLayout({
 }) {
   const session = await requireMerchantSession();
   const locale = await getCurrentLocale();
-  const isProfileComplete = isMerchantProfileComplete(session.merchantUser.merchant);
-  const merchantDisplayName = getMerchantDisplayName(session.merchantUser.merchant.name, locale, {
-    profileComplete: isProfileComplete,
-  });
+  const merchantDisplayName = getMerchantWorkspaceName(
+    session.merchantUser.merchant.name,
+    locale,
+  );
   const content =
     locale === "en"
       ? {
           overviewLabel: "Overview",
+          overviewHomeLabel: "Executive Summary",
+          overviewHomeDetail: "View merchant readiness, metrics, and recent transaction snapshots",
+          overviewIntegrationLabel: "Integration",
+          overviewIntegrationDetail: "Copy NoveShop merchant-backend fields and API endpoints",
+          overviewProfileLabel: "Merchant Profile",
+          overviewProfileDetail: "Maintain merchant identity, callback, and security settings",
+          overviewCredentialsLabel: "API Credentials",
+          overviewCredentialsDetail: "Create credentials and save one-time Secrets securely",
           channelsLabel: "Channels",
           ordersLabel: "Orders",
           refundsLabel: "Refunds",
-          overviewDetail: "Manage profile, channel accounts, credentials, and recent transactions",
+          overviewDetail: "Open summary view and jump into dedicated merchant operation pages",
           channelsDetail: "Configure payment channels and obtain dedicated upstream callback endpoints",
           ordersDetail: "Review merchant orders and synchronize transaction status",
           refundsDetail: "Initiate refunds and track refund outcomes",
@@ -37,10 +45,18 @@ export default async function MerchantConsoleLayout({
         }
       : {
           overviewLabel: "商户总览",
+          overviewHomeLabel: "摘要总览",
+          overviewHomeDetail: "查看接入状态、核心指标与近期交易摘要",
+          overviewIntegrationLabel: "接入参数",
+          overviewIntegrationDetail: "复制 NoveShop 商户后台配置与接口地址",
+          overviewProfileLabel: "商户配置",
+          overviewProfileDetail: "维护商户资料、业务回调与安全参数",
+          overviewCredentialsLabel: "API 凭证",
+          overviewCredentialsDetail: "创建凭证并保存一次性 Secret",
           channelsLabel: "支付通道",
           ordersLabel: "我的订单",
           refundsLabel: "退款管理",
-          overviewDetail: "维护资料、支付通道实例、凭证和最近交易。",
+          overviewDetail: "打开摘要页，并进入独立的商户配置子页面。",
           channelsDetail: "录入支付参数并获取专属上游回调地址。",
           ordersDetail: "查看当前商户订单，支持同步状态与关单。",
           refundsDetail: "发起退款并跟踪退款结果。",
@@ -54,6 +70,33 @@ export default async function MerchantConsoleLayout({
       href: "/merchant",
       label: content.overviewLabel,
       detail: content.overviewDetail,
+      matchPaths: [
+        "/merchant/integration",
+        "/merchant/profile",
+        "/merchant/credentials",
+      ],
+      children: [
+        {
+          href: "/merchant",
+          label: content.overviewHomeLabel,
+          detail: content.overviewHomeDetail,
+        },
+        {
+          href: "/merchant/integration",
+          label: content.overviewIntegrationLabel,
+          detail: content.overviewIntegrationDetail,
+        },
+        {
+          href: "/merchant/profile",
+          label: content.overviewProfileLabel,
+          detail: content.overviewProfileDetail,
+        },
+        {
+          href: "/merchant/credentials",
+          label: content.overviewCredentialsLabel,
+          detail: content.overviewCredentialsDetail,
+        },
+      ],
     },
     ...(hasMerchantPermission(session.merchantUser.role, "channel:read")
       ? [

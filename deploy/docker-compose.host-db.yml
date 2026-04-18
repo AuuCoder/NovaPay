@@ -1,0 +1,70 @@
+name: novapay
+
+services:
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run db:migrate:deploy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
+    profiles: ["ops"]
+
+  preflight:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run env:check:prod
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
+    profiles: ["ops"]
+
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run start
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000/api/health').then((response)=>process.exit(response.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  callbacks-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run callbacks:worker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  finance-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run finance:worker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

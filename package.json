@@ -20,7 +20,8 @@
     "callbacks:retry-once": "tsx scripts/callback-retry-worker.ts --once",
     "callbacks:worker": "tsx scripts/callback-retry-worker.ts",
     "finance:sync-once": "tsx scripts/finance-worker.ts --once",
-    "finance:worker": "tsx scripts/finance-worker.ts"
+    "finance:worker": "tsx scripts/finance-worker.ts",
+    "env:check:prod": "NODE_ENV=production node --import tsx scripts/check-production-env.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.7.0",

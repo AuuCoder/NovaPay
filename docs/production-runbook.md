@@ -30,6 +30,30 @@ SETTLEMENT_HOLD_DAYS="1"
 
 支付宝和微信支付参数不再由平台环境变量统一提供，而是由商户在控制台各自维护。
 
+也可以直接从生产模板开始：
+
+```bash
+cp .env.production.example .env
+```
+
+如果应用和 PostgreSQL 都准备使用 Docker Compose，建议改用：
+
+```bash
+cp .env.docker-compose.example .env
+```
+
+如果数据库直接装在服务器本机，可以直接使用：
+
+```bash
+cp .env.server-local.example .env
+```
+
+如果应用准备使用 Docker、数据库仍然使用服务器本机 PostgreSQL，建议改用：
+
+```bash
+cp .env.docker-host-db.example .env
+```
+
 ## 2. 数据库发布
 
 正式环境使用 Prisma migration deploy：
@@ -44,6 +68,12 @@ npm run db:migrate:deploy
 - `npm run db:push`
 - `npm run db:migrate`
 
+执行数据库迁移后，建议先做一次生产预检：
+
+```bash
+npm run env:check:prod
+```
+
 ## 3. 应用发布
 
 ```bash
@@ -52,6 +82,56 @@ npm run start
 ```
 
 建议把 Web 应用、回调 worker、财务 worker 分成独立进程托管。
+
+### Docker Compose
+
+仓库已提供单机部署示例：
+
+先确认当前机器使用的是官方 `Docker Engine + Docker Compose v2`。
+如果命令输出里出现 `Emulate Docker CLI using podman` 或 `Executing external compose provider "/usr/bin/docker-compose"`，说明当前跑的是 `podman` 兼容层或旧版 `docker-compose v1`，需要先切回官方 Docker，再执行下面的命令。
+
+```bash
+docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm migrate
+docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm preflight
+docker compose -f deploy/docker-compose.prod.yml up -d web callbacks-worker finance-worker
+```
+
+如果准备连同内置 PostgreSQL 一起启动：
+
+```bash
+docker compose -f deploy/docker-compose.prod.yml up -d postgres web callbacks-worker finance-worker
+```
+
+如果使用 Compose 里自带的 PostgreSQL，请把 `DATABASE_URL` 改成容器内地址，例如：
+
+```bash
+DATABASE_URL="postgresql://postgres:postgres@postgres:5432/novapay?schema=public"
+```
+
+也可以直接从：
+
+```bash
+cp .env.docker-compose.example .env
+```
+
+开始。
+
+如果数据库是服务器本机 PostgreSQL，请改用：
+
+```bash
+docker compose -f deploy/docker-compose.host-db.yml --profile ops run --rm migrate
+docker compose -f deploy/docker-compose.host-db.yml --profile ops run --rm preflight
+docker compose -f deploy/docker-compose.host-db.yml up -d web callbacks-worker finance-worker
+```
+
+### PM2
+
+仓库也提供了 `ecosystem.config.cjs`：
+
+```bash
+pm2 start ecosystem.config.cjs
+pm2 save
+```
 
 ## 4. Worker 发布
 

@@ -17,6 +17,7 @@ import {
   clearMerchantCredentialReveal,
   stashMerchantCredentialReveal,
 } from "@/lib/merchant-credential-reveal";
+import { revealMerchantCredentialSecret } from "@/lib/merchant-credentials";
 import {
   generateMerchantChannelCallbackToken,
   getMerchantChannelTemplate,
@@ -31,6 +32,8 @@ import { hashPassword } from "@/lib/password";
 import {
   assertMerchantProfileCompleteForChannel,
   createPendingMerchantName,
+  isMerchantProfileComplete,
+  channelRequiresMerchantProfile,
 } from "@/lib/merchant-profile-completion";
 import { formatAmount } from "@/lib/payments/utils";
 import { getPrismaClient } from "@/lib/prisma";
@@ -104,12 +107,33 @@ function parseAmount(text: string, fieldName: string) {
 }
 
 function parseUrlOrNull(text: string, fieldName: string) {
-  if (!text.trim()) {
+  const raw = text.trim();
+
+  if (!raw) {
     return null;
   }
 
+  const hasProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw);
+  const looksLikeHostWithoutProtocol =
+    /^(localhost|(?:\d{1,3}\.){3}\d{1,3}|[a-z0-9-]+(?:\.[a-z0-9-]+)+)(:\d+)?(\/.*)?$/i.test(
+      raw,
+    );
+  const normalized = hasProtocol
+    ? raw
+    : looksLikeHostWithoutProtocol
+      ? /^(localhost|(?:\d{1,3}\.){3}\d{1,3})(:\d+)?(\/.*)?$/i.test(raw)
+        ? `http://${raw}`
+        : `https://${raw}`
+      : raw;
+
   try {
-    return new URL(text).toString();
+    const url = new URL(normalized);
+
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("Unsupported protocol");
+    }
+
+    return url.toString();
   } catch {
     throw new Error(`${fieldName} 必须是合法 URL。`);
   }
@@ -192,6 +216,9 @@ function resolveNotifySecretForStorage(input: {
 
 function revalidateMerchantPaths() {
   revalidatePath("/merchant");
+  revalidatePath("/merchant/integration");
+  revalidatePath("/merchant/profile");
+  revalidatePath("/merchant/credentials");
   revalidatePath("/merchant/channels");
   revalidatePath("/merchant/orders");
   revalidatePath("/merchant/refunds");
@@ -281,6 +308,7 @@ async function maybeSetMerchantChannelBindingDefault(input: {
   channelCode: string;
   merchantChannelAccountId: string;
   shouldSetDefault: boolean;
+  bindingEnabled: boolean;
 }) {
   const prisma = getPrismaClient();
   const existingBinding = await prisma.merchantChannelBinding.findUnique({
@@ -307,18 +335,74 @@ async function maybeSetMerchantChannelBindingDefault(input: {
       },
     },
     update: {
-      enabled: true,
+      enabled: input.bindingEnabled,
       merchantChannelAccountId: input.merchantChannelAccountId,
       providerAccountId: null,
     },
     create: {
       merchantId: input.merchantId,
       channelCode: input.channelCode,
-      enabled: true,
+      enabled: input.bindingEnabled,
       merchantChannelAccountId: input.merchantChannelAccountId,
       providerAccountId: null,
     },
   });
+}
+
+async function maybeAutoEnableMerchantChannelDraftsAfterProfileCompletion(input: {
+  merchantId: string;
+}) {
+  const prisma = getPrismaClient();
+  const draftAccounts = await prisma.merchantChannelAccount.findMany({
+    where: {
+      merchantId: input.merchantId,
+      enabled: false,
+      bindings: {
+        some: {},
+      },
+    },
+    select: {
+      id: true,
+      channelCode: true,
+      displayName: true,
+    },
+  });
+
+  const regulatedDraftAccounts = draftAccounts.filter((account) =>
+    channelRequiresMerchantProfile(account.channelCode),
+  );
+
+  if (regulatedDraftAccounts.length === 0) {
+    return [];
+  }
+
+  const regulatedDraftIds = regulatedDraftAccounts.map((account) => account.id);
+
+  await prisma.$transaction([
+    prisma.merchantChannelAccount.updateMany({
+      where: {
+        id: {
+          in: regulatedDraftIds,
+        },
+      },
+      data: {
+        enabled: true,
+      },
+    }),
+    prisma.merchantChannelBinding.updateMany({
+      where: {
+        merchantId: input.merchantId,
+        merchantChannelAccountId: {
+          in: regulatedDraftIds,
+        },
+      },
+      data: {
+        enabled: true,
+      },
+    }),
+  ]);
+
+  return regulatedDraftAccounts;
 }
 
 export async function registerMerchantAction(formData: FormData) {
@@ -529,6 +613,11 @@ export async function logoutMerchantAction() {
 export async function updateMerchantProfileAction(formData: FormData) {
   const session = await requireMerchantPermission("profile:write");
   const redirectTo = getRedirectTo(formData, "/merchant");
+  let autoEnabledDraftAccounts: Array<{
+    id: string;
+    channelCode: string;
+    displayName: string;
+  }> = [];
 
   try {
     const prisma = getPrismaClient();
@@ -556,7 +645,6 @@ export async function updateMerchantProfileAction(formData: FormData) {
         contactName: getOptionalString(formData, "contactName"),
         contactEmail: getOptionalString(formData, "contactEmail"),
         contactPhone: getOptionalString(formData, "contactPhone"),
-        website: getOptionalString(formData, "website"),
         companyRegistrationId: getOptionalString(formData, "companyRegistrationId"),
         onboardingNote: getOptionalString(formData, "onboardingNote"),
         callbackBase: parseUrlOrNull(getString(formData, "callbackBase"), "默认业务回调地址"),
@@ -569,6 +657,13 @@ export async function updateMerchantProfileAction(formData: FormData) {
         callbackEnabled: getBoolean(formData, "callbackEnabled"),
       },
     });
+    const profileComplete = isMerchantProfileComplete(merchant);
+
+    if (profileComplete) {
+      autoEnabledDraftAccounts = await maybeAutoEnableMerchantChannelDraftsAfterProfileCompletion({
+        merchantId: merchant.id,
+      });
+    }
 
     await writeAdminAuditLog({
       actor: getMerchantAuditActor(session),
@@ -581,6 +676,11 @@ export async function updateMerchantProfileAction(formData: FormData) {
         callbackEnabled: merchant.callbackEnabled,
         callbackBase: merchant.callbackBase,
         apiIpWhitelist: merchant.apiIpWhitelist,
+        autoEnabledDraftChannels: autoEnabledDraftAccounts.map((account) => ({
+          id: account.id,
+          channelCode: account.channelCode,
+          displayName: account.displayName,
+        })),
       },
     });
     revalidateMerchantPaths();
@@ -588,7 +688,15 @@ export async function updateMerchantProfileAction(formData: FormData) {
     redirectWithError(redirectTo, error);
   }
 
-  redirect(withMessage(redirectTo, "success", "商户配置已保存。"));
+  redirect(
+    withMessage(
+      redirectTo,
+      "success",
+      autoEnabledDraftAccounts.length > 0
+        ? `商户配置已保存，并已自动启用 ${autoEnabledDraftAccounts.length} 个待激活的支付通道实例。`
+        : "商户配置已保存。",
+    ),
+  );
 }
 
 export async function createMerchantSelfServiceApiCredentialAction(formData: FormData) {
@@ -630,6 +738,7 @@ export async function createMerchantSelfServiceApiCredentialAction(formData: For
       },
     });
     await stashMerchantCredentialReveal({
+      credentialId: credential.id,
       keyId: generated.keyId,
       secret: generated.secret,
       label: credential.label,
@@ -649,10 +758,69 @@ export async function createMerchantSelfServiceApiCredentialAction(formData: For
   redirect(successRedirect ?? redirectTo);
 }
 
-export async function dismissMerchantCredentialRevealAction() {
+export async function dismissMerchantCredentialRevealAction(formData: FormData) {
   await requireMerchantSession();
+  const redirectTo = getRedirectTo(formData, "/merchant");
   await clearMerchantCredentialReveal();
-  redirect("/merchant");
+  redirect(redirectTo);
+}
+
+export async function revealMerchantApiCredentialSecretAction(formData: FormData) {
+  const session = await requireMerchantPermission("credential:write");
+  const redirectTo = getRedirectTo(formData, "/merchant/credentials");
+
+  try {
+    const password = getRequiredString(formData, "currentPassword", "当前登录密码");
+    const credentialId = getRequiredString(formData, "credentialId", "凭证 ID");
+    const confirmedUser = await authenticateMerchantUser(
+      session.merchantUser.email,
+      password,
+    );
+
+    if (!confirmedUser || confirmedUser.id !== session.merchantUser.id) {
+      throw new Error("当前登录密码验证失败，请重新输入。");
+    }
+
+    const credential = await getPrismaClient().merchantApiCredential.findUnique({
+      where: {
+        id: credentialId,
+      },
+      select: {
+        id: true,
+        merchantId: true,
+        keyId: true,
+        label: true,
+        secretCiphertext: true,
+      },
+    });
+
+    if (!credential || credential.merchantId !== session.merchantUser.merchantId) {
+      throw new Error("指定的 API 凭证不存在。");
+    }
+
+    await stashMerchantCredentialReveal({
+      credentialId: credential.id,
+      keyId: credential.keyId,
+      secret: revealMerchantCredentialSecret(credential.secretCiphertext),
+      label: credential.label,
+      source: "reauth",
+    });
+
+    await writeAdminAuditLog({
+      actor: getMerchantAuditActor(session),
+      action: "merchant.self_service.reveal_credential_secret",
+      resourceType: "merchant_api_credential",
+      resourceId: credential.id,
+      summary: `商户 ${session.merchantUser.merchant.code} 通过验密显示 API 凭证 ${credential.label} 的完整 Secret。`,
+      metadata: {
+        keyId: credential.keyId,
+      },
+    });
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "已完成密码验证，完整 API Secret 已显示。"));
 }
 
 export async function runMerchantCheckoutSmokeTestAction(formData: FormData) {
@@ -885,6 +1053,7 @@ export async function createMerchantChannelAccountAction(formData: FormData) {
       channelCode: template.channelCode,
       merchantChannelAccountId: account.id,
       shouldSetDefault: getBoolean(formData, "setAsDefault"),
+      bindingEnabled: shouldEnable,
     });
 
     await writeAdminAuditLog({
@@ -979,6 +1148,7 @@ export async function updateMerchantChannelAccountAction(formData: FormData) {
       channelCode: template.channelCode,
       merchantChannelAccountId: account.id,
       shouldSetDefault: getBoolean(formData, "setAsDefault"),
+      bindingEnabled: requestedEnabled,
     });
 
     await writeAdminAuditLog({

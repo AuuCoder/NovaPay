@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Locale } from "@/lib/i18n";
-import { getOptionalUrl } from "@/lib/payments/utils";
+import { getPublicBaseUrl } from "@/lib/env";
 import { maskProviderConfigForDisplay } from "@/lib/provider-account-config";
 
 interface MerchantChannelFieldDefinition {
@@ -109,8 +109,7 @@ export function buildMerchantChannelCallbackPath(channelCode: string, accountId:
 }
 
 export function buildMerchantChannelCallbackUrl(channelCode: string, accountId: string, token: string) {
-  const base = getOptionalUrl(process.env.NOVAPAY_PUBLIC_BASE_URL) ?? "http://localhost:3000";
-  return `${base}${buildMerchantChannelCallbackPath(channelCode, accountId, token)}`;
+  return `${getPublicBaseUrl()}${buildMerchantChannelCallbackPath(channelCode, accountId, token)}`;
 }
 
 export function maskMerchantChannelConfig(value: unknown) {

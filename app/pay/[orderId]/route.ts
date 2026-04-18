@@ -323,6 +323,309 @@ async function renderWxpayCheckoutPage(input: {
 </html>`;
 }
 
+function renderAlipayCheckoutPage(input: {
+  orderId: string;
+  externalOrderId: string;
+  subject: string;
+  amount: string;
+  currency: string;
+  checkoutUrl: string;
+  expireAt: Date | null;
+}) {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>支付宝支付</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(22, 119, 255, 0.16), transparent 38%),
+          linear-gradient(180deg, #f6f9ff 0%, #eef3fb 100%);
+        color: #17314f;
+      }
+
+      main {
+        width: min(100%, 980px);
+        border-radius: 32px;
+        border: 1px solid rgba(23, 49, 79, 0.08);
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 28px 90px rgba(23, 49, 79, 0.12);
+        overflow: hidden;
+      }
+
+      .layout {
+        display: grid;
+      }
+
+      @media (min-width: 900px) {
+        .layout {
+          grid-template-columns: 400px 1fr;
+        }
+      }
+
+      .hero-panel {
+        padding: 34px 30px;
+        background: linear-gradient(180deg, #1677ff 0%, #0f5ed6 100%);
+        color: white;
+      }
+
+      .content-panel {
+        padding: 34px 30px;
+      }
+
+      .eyebrow {
+        margin: 0;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        opacity: 0.82;
+      }
+
+      h1 {
+        margin: 12px 0 0;
+        font-size: 34px;
+        line-height: 1.15;
+      }
+
+      .lead {
+        margin: 14px 0 0;
+        font-size: 15px;
+        line-height: 1.9;
+      }
+
+      .hero-card {
+        margin-top: 28px;
+        border-radius: 28px;
+        padding: 22px;
+        background: rgba(255, 255, 255, 0.12);
+        backdrop-filter: blur(10px);
+      }
+
+      .hero-card h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .hero-card p {
+        margin: 12px 0 0;
+        font-size: 14px;
+        line-height: 1.9;
+        color: rgba(255, 255, 255, 0.9);
+      }
+
+      .amount-box {
+        margin-top: 18px;
+        border-radius: 22px;
+        background: rgba(9, 33, 71, 0.18);
+        padding: 16px 18px;
+      }
+
+      .amount-label {
+        margin: 0;
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.72);
+      }
+
+      .amount-value {
+        margin: 10px 0 0;
+        font-size: 34px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .notice {
+        border-radius: 24px;
+        border: 1px solid #d6e4ff;
+        background: #f5f9ff;
+        padding: 18px 20px;
+      }
+
+      .notice h2 {
+        margin: 0;
+        font-size: 17px;
+        color: #17314f;
+      }
+
+      .notice p {
+        margin: 10px 0 0;
+        font-size: 14px;
+        line-height: 1.9;
+        color: #4a6481;
+      }
+
+      .meta-grid {
+        display: grid;
+        gap: 14px;
+        margin-top: 22px;
+      }
+
+      @media (min-width: 560px) {
+        .meta-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      .meta-item {
+        border-radius: 22px;
+        border: 1px solid rgba(23, 49, 79, 0.08);
+        background: #fbfcff;
+        padding: 16px 18px;
+      }
+
+      .meta-label {
+        margin: 0;
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #69829f;
+      }
+
+      .meta-value {
+        margin: 10px 0 0;
+        color: #17314f;
+        line-height: 1.8;
+        word-break: break-all;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 26px;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 48px;
+        padding: 0 20px;
+        border-radius: 999px;
+        border: 1px solid #d6e4ff;
+        background: white;
+        color: #17314f;
+        font-size: 14px;
+        font-weight: 600;
+        text-decoration: none;
+        transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+      }
+
+      .button:hover {
+        transform: translateY(-1px);
+        border-color: #1677ff;
+      }
+
+      .button.primary {
+        border-color: #1677ff;
+        background: #1677ff;
+        color: white;
+        box-shadow: 0 18px 40px rgba(22, 119, 255, 0.24);
+      }
+
+      .tip-list {
+        margin: 22px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 12px;
+      }
+
+      .tip-list li {
+        border-radius: 20px;
+        background: #f8fafc;
+        padding: 14px 16px;
+        font-size: 13px;
+        line-height: 1.9;
+        color: #516b88;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="layout">
+        <section class="hero-panel">
+          <p class="eyebrow">NovaPay</p>
+          <h1>请前往支付宝完成支付</h1>
+          <p class="lead">NovaPay 已为当前订单准备好支付宝收银台。为避免直接暴露上游地址，本页只提供统一的支付入口和状态刷新动作。</p>
+
+          <div class="hero-card">
+            <h2>支付说明</h2>
+            <p>点击“前往支付宝支付”后，会在新窗口打开支付宝收银台。支付完成后，请返回当前页面刷新结果。</p>
+            <div class="amount-box">
+              <p class="amount-label">当前支付金额</p>
+              <p class="amount-value">${escapeHtml(formatAmount(input.amount, input.currency))}</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="content-panel">
+          <div class="notice">
+            <h2>${escapeHtml(input.subject)}</h2>
+            <p>如果支付宝打开后提示异常、风控或系统错误，这通常是上游收银台对该笔订单的状态校验结果，不代表 NovaPay 当前页面样式异常。你可以返回本页刷新支付状态，确认该订单是否已支付、已关闭或已失效。</p>
+          </div>
+
+          <div class="meta-grid">
+            <article class="meta-item">
+              <p class="meta-label">商户订单号</p>
+              <p class="meta-value">${escapeHtml(input.externalOrderId)}</p>
+            </article>
+            <article class="meta-item">
+              <p class="meta-label">系统订单 ID</p>
+              <p class="meta-value">${escapeHtml(input.orderId)}</p>
+            </article>
+            <article class="meta-item">
+              <p class="meta-label">支付金额</p>
+              <p class="meta-value">${escapeHtml(formatAmount(input.amount, input.currency))}</p>
+            </article>
+            <article class="meta-item">
+              <p class="meta-label">失效时间</p>
+              <p class="meta-value">${escapeHtml(input.expireAt ? input.expireAt.toLocaleString("zh-CN", { hour12: false }) : "按通道默认时效")}</p>
+            </article>
+          </div>
+
+          <div class="actions">
+            <a
+              class="button primary"
+              href="${escapeHtml(input.checkoutUrl)}"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              前往支付宝支付
+            </a>
+            <a class="button" href="/pay/${escapeHtml(input.orderId)}/return">刷新支付状态</a>
+          </div>
+
+          <ul class="tip-list">
+            <li>支付成功后，支付宝通常会自动回跳或关闭支付窗口；如果没有，请手动返回当前页查看结果。</li>
+            <li>如果支付宝提示订单异常或风险拦截，优先先点“刷新支付状态”，不要仅凭上游错误页判断订单失败。</li>
+            <li>如果订单仍为未支付状态，建议关闭当前订单后重新创建一笔新的支付单再测试。</li>
+          </ul>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>`;
+}
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ orderId: string }> },
@@ -357,7 +660,10 @@ export async function GET(
 
   let order = normalizeHostedOrder(orderSeed);
 
-  if (order.channelCode === "wxpay.native" && !isTerminalPaymentStatus(order.status)) {
+  if (
+    (order.channelCode === "wxpay.native" || order.channelCode === "alipay.page") &&
+    !isTerminalPaymentStatus(order.status)
+  ) {
     try {
       const synced = await getMerchantPaymentOrder({
         merchantCode: order.merchant.code,
@@ -379,6 +685,30 @@ export async function GET(
     }
 
     const html = await renderWxpayCheckoutPage({
+      orderId: order.id,
+      externalOrderId: order.externalOrderId,
+      subject: order.subject,
+      amount: order.amount,
+      currency: order.currency,
+      checkoutUrl: order.checkoutUrl,
+      expireAt: order.expireAt,
+    });
+
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  if (order.channelCode === "alipay.page") {
+    if (isTerminalPaymentStatus(order.status)) {
+      return Response.redirect(new URL(`/pay/${order.id}/return`, request.url), 302);
+    }
+
+    const html = renderAlipayCheckoutPage({
       orderId: order.id,
       externalOrderId: order.externalOrderId,
       subject: order.subject,

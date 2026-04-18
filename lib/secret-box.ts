@@ -1,15 +1,10 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { getDataEncryptionKey } from "@/lib/env";
 
 const STORED_SECRET_PREFIX = "sealed:";
 
 function getEncryptionKey() {
-  const configured = process.env.NOVAPAY_DATA_ENCRYPTION_KEY?.trim();
-
-  if (!configured) {
-    throw new Error("NOVAPAY_DATA_ENCRYPTION_KEY is required.");
-  }
-
-  return createHash("sha256").update(configured).digest();
+  return createHash("sha256").update(getDataEncryptionKey()).digest();
 }
 
 export function encryptSecret(value: string) {

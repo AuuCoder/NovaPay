@@ -1,4 +1,5 @@
 import { type Locale, pickByLocale } from "@/lib/i18n";
+import { getPublicBaseUrl } from "@/lib/env";
 
 function makeErrorResponse(description: string) {
   return {
@@ -103,7 +104,7 @@ export function getOpenApiSpec(locale: Locale = "zh") {
     },
     servers: [
       {
-        url: process.env.NOVAPAY_PUBLIC_BASE_URL ?? "http://localhost:3000",
+        url: getPublicBaseUrl(),
         description: t("当前 NovaPay 环境", "Current NovaPay environment"),
       },
     ],
@@ -140,7 +141,6 @@ export function getOpenApiSpec(locale: Locale = "zh") {
             contactName: { type: ["string", "null"] },
             contactEmail: { type: ["string", "null"] },
             contactPhone: { type: ["string", "null"] },
-            website: { type: ["string", "null"], format: "uri" },
             companyRegistrationId: { type: ["string", "null"] },
             onboardingNote: { type: ["string", "null"] },
             reviewNote: { type: ["string", "null"] },
@@ -924,7 +924,6 @@ export function getOpenApiSpec(locale: Locale = "zh") {
                     contactName: { type: ["string", "null"] },
                     contactEmail: { type: ["string", "null"] },
                     contactPhone: { type: ["string", "null"] },
-                    website: { type: ["string", "null"], format: "uri" },
                     companyRegistrationId: { type: ["string", "null"] },
                     onboardingNote: { type: ["string", "null"] },
                     reviewNote: { type: ["string", "null"] },
@@ -1005,7 +1004,6 @@ export function getOpenApiSpec(locale: Locale = "zh") {
                     contactName: { type: ["string", "null"] },
                     contactEmail: { type: ["string", "null"] },
                     contactPhone: { type: ["string", "null"] },
-                    website: { type: ["string", "null"], format: "uri" },
                     companyRegistrationId: { type: ["string", "null"] },
                     onboardingNote: { type: ["string", "null"] },
                     reviewNote: { type: ["string", "null"] },

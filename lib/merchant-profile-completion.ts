@@ -85,6 +85,19 @@ export function getMerchantDisplayName(
   return locale === "en" ? "Pending Verification Merchant" : "待认证商户";
 }
 
+export function getMerchantWorkspaceName(
+  name: string | null | undefined,
+  locale: Locale = "zh",
+) {
+  const trimmed = name?.trim();
+
+  if (trimmed && !isPendingMerchantName(trimmed)) {
+    return trimmed;
+  }
+
+  return locale === "en" ? "Merchant Workspace" : "商户工作台";
+}
+
 export function getMerchantEditableName(name: string | null | undefined) {
   return isPendingMerchantName(name) ? "" : name?.trim() ?? "";
 }

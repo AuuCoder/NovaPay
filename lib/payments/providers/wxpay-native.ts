@@ -438,8 +438,29 @@ async function requestWechatpay<T>(input: {
   });
   const rawBody = await response.text();
   const hasSignature = Boolean(response.headers.get("wechatpay-signature"));
+  const hasSignedHeaders =
+    Boolean(response.headers.get("wechatpay-timestamp")) &&
+    Boolean(response.headers.get("wechatpay-nonce")) &&
+    Boolean(response.headers.get("wechatpay-signature")) &&
+    Boolean(response.headers.get("wechatpay-serial"));
 
-  if (hasSignature || rawBody) {
+  if (response.ok) {
+    if ((hasSignature || rawBody) && !hasSignedHeaders) {
+      throw new Error("WeChat Pay successful response is missing signature headers.");
+    }
+
+    if (hasSignature || rawBody) {
+      verifyWechatpaySignature({
+        source: "response",
+        config: input.config,
+        timestamp: response.headers.get("wechatpay-timestamp"),
+        nonce: response.headers.get("wechatpay-nonce"),
+        signature: response.headers.get("wechatpay-signature"),
+        serial: response.headers.get("wechatpay-serial"),
+        body: rawBody,
+      });
+    }
+  } else if (hasSignature) {
     verifyWechatpaySignature({
       source: "response",
       config: input.config,

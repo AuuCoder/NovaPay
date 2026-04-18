@@ -69,10 +69,10 @@ export default async function HostedPaymentReturnPage({
           updatedAt: "Last Updated",
           paidAt: "Paid At",
           pendingHint:
-            "If the payment has just been completed, the final result may take a short moment to synchronize.",
+            "If the payment has just been completed, the final result may take a short moment to synchronize. If the provider page looked abnormal, refresh here first before treating the order as failed.",
           successHint: "The order payment has been confirmed successfully.",
           failedHint:
-            "The payment is not completed yet or has been closed. You can return to the hosted cashier and try again if needed.",
+            "The payment is not completed yet or has been closed. If the provider page showed a risk or system message, confirm the latest tracked result here first, then return to the hosted cashier if needed.",
           refresh: "Refresh Status",
           retry: "Return to Cashier",
         }
@@ -84,9 +84,11 @@ export default async function HostedPaymentReturnPage({
           amount: "金额",
           updatedAt: "最近更新",
           paidAt: "支付时间",
-          pendingHint: "如果刚完成支付，最终结果可能还需要几秒钟同步，请稍后刷新查看。",
+          pendingHint:
+            "如果刚完成支付，最终结果可能还需要几秒钟同步。若刚才支付宝或微信页面提示异常，请先在这里刷新状态，不要直接判定支付失败。",
           successHint: "当前订单已确认支付成功。",
-          failedHint: "当前支付尚未完成或已关闭，如有需要可返回收银台重新发起支付。",
+          failedHint:
+            "当前支付尚未完成或已关闭。若上游支付页刚才提示风险或系统异常，请先以这里的跟踪结果为准，再决定是否返回收银台重新发起支付。",
           refresh: "刷新状态",
           retry: "返回收银台",
         };

@@ -1,5 +1,6 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/generated/prisma/client";
+import { getPublicBaseUrl } from "@/lib/env";
 
 declare global {
   var prismaClientSingleton: PrismaClient | undefined;
@@ -32,6 +33,10 @@ export function getPrismaClient() {
 
   if (!connectionString) {
     throw new Error("DATABASE_URL is missing. Copy .env.example to .env first.");
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    void getPublicBaseUrl();
   }
 
   if (

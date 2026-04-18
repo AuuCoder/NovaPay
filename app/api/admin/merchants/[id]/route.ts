@@ -136,7 +136,6 @@ export async function PUT(
       ...(body.contactName !== undefined ? { contactName: merchantProfile.contactName } : {}),
       ...(body.contactEmail !== undefined ? { contactEmail: readOptionalString(body, "contactEmail") } : {}),
       ...(body.contactPhone !== undefined ? { contactPhone: merchantProfile.contactPhone } : {}),
-      ...(body.website !== undefined ? { website: readOptionalString(body, "website") } : {}),
       ...(body.companyRegistrationId !== undefined
         ? { companyRegistrationId: merchantProfile.companyRegistrationId }
         : {}),

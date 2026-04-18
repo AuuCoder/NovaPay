@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
+  createMerchantUserAction,
   createMerchantApiCredentialAction,
   reviewMerchantAction,
   updateMerchantAction,
+  updateMerchantUserAction,
   updateMerchantApiCredentialStatusAction,
 } from "@/app/admin/actions";
 import {
@@ -33,6 +35,7 @@ import {
 import { PaymentStatus } from "@/generated/prisma/enums";
 import { requireAdminPermission } from "@/lib/admin-session";
 import { getCurrentLocale } from "@/lib/i18n-server";
+import { getMerchantDisplayRole } from "@/lib/merchant-session";
 import { getMerchantDisplayName, getMerchantEditableName } from "@/lib/merchant-profile-completion";
 import { getPrismaClient } from "@/lib/prisma";
 import { hasPermission } from "@/lib/rbac";
@@ -98,6 +101,19 @@ export default async function MerchantDetailPage({
       },
       apiCredentials: {
         orderBy: [{ createdAt: "desc" }],
+      },
+      users: {
+        orderBy: [{ createdAt: "asc" }],
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          enabled: true,
+          lastLoginAt: true,
+          createdAt: true,
+          updatedAt: true,
+        },
       },
       paymentOrders: {
         orderBy: [{ createdAt: "desc" }],
@@ -173,7 +189,6 @@ export default async function MerchantDetailPage({
           contactNameLabel: "Contact Name",
           contactEmailLabel: "Contact Email",
           contactPhoneLabel: "Contact Phone",
-          websiteLabel: "Website",
           callbackBaseLabel: "Default Business Callback URL",
           ipWhitelistLabel: "API IP Whitelist",
           ipWhitelistHint: "Enter one IP per line or separate by commas. Leave blank for no restriction.",
@@ -186,6 +201,27 @@ export default async function MerchantDetailPage({
           updatedAt: "Updated",
           statusChangedAt: "Status Changed",
           saveProfile: "Save Merchant Profile",
+          usersEyebrow: "Merchant Users",
+          usersTitle: "Merchant login accounts",
+          usersDescription:
+            "Manage merchant console login accounts here. Passwords are stored as hashes and cannot be viewed; administrators can only reset them by entering a new password.",
+          createUserTitle: "Create merchant login",
+          userNameLabel: "Login Name",
+          userEmailLabel: "Login Email",
+          userRoleLabel: "Role",
+          userPasswordLabel: "New Password",
+          userConfirmPasswordLabel: "Confirm Password",
+          userEnabledLabel: "Enable login",
+          createUserButton: "Create Login Account",
+          saveUserButton: "Save Login Account",
+          noUsers: "This merchant does not have any login accounts yet.",
+          userPasswordHintCreate: "At least 8 characters. Passwords are hashed and never shown in plaintext.",
+          userPasswordHintUpdate: "Leave blank to keep the current password. Enter a new value to reset it.",
+          lastLoginCol: "Last Login",
+          loginCreatedAtCol: "Created",
+          accountStatusEnabled: "Enabled",
+          accountStatusDisabled: "Disabled",
+          noUserManagePermission: "This account cannot manage merchant login accounts.",
           reviewEyebrow: "Review",
           reviewTitle: "Review and access control",
           approvedAt: "Approved At",
@@ -286,7 +322,6 @@ export default async function MerchantDetailPage({
           contactNameLabel: "联系人",
           contactEmailLabel: "联系邮箱",
           contactPhoneLabel: "联系电话",
-          websiteLabel: "企业网站",
           callbackBaseLabel: "默认业务回调地址",
           ipWhitelistLabel: "API IP 白名单",
           ipWhitelistHint: "每行一个 IP 或使用逗号分隔。留空表示不限制来源地址。",
@@ -298,6 +333,27 @@ export default async function MerchantDetailPage({
           updatedAt: "更新于",
           statusChangedAt: "状态更新时间",
           saveProfile: "保存商户配置",
+          usersEyebrow: "Merchant Users",
+          usersTitle: "商户登录账号",
+          usersDescription:
+            "在这里维护商户控制台登录账号。密码只会以哈希方式存储，后台不能查看原文，只能通过输入新密码来重置。",
+          createUserTitle: "新增商户登录账号",
+          userNameLabel: "登录姓名",
+          userEmailLabel: "登录邮箱",
+          userRoleLabel: "账号角色",
+          userPasswordLabel: "新密码",
+          userConfirmPasswordLabel: "确认密码",
+          userEnabledLabel: "启用登录",
+          createUserButton: "创建登录账号",
+          saveUserButton: "保存登录账号",
+          noUsers: "当前商户还没有任何登录账号。",
+          userPasswordHintCreate: "至少 8 位。密码会以哈希方式存储，后台不显示原文。",
+          userPasswordHintUpdate: "留空则保持当前密码不变；输入新值即可重置密码。",
+          lastLoginCol: "最近登录",
+          loginCreatedAtCol: "创建时间",
+          accountStatusEnabled: "启用",
+          accountStatusDisabled: "停用",
+          noUserManagePermission: "当前账号没有权限管理商户登录账号。",
           reviewEyebrow: "Review",
           reviewTitle: "审核与准入",
           approvedAt: "审核通过于",
@@ -462,9 +518,6 @@ export default async function MerchantDetailPage({
                 <input name="contactPhone" defaultValue={merchant.contactPhone ?? ""} className={inputClass} />
               </LabeledField>
             </div>
-            <LabeledField label={content.websiteLabel}>
-              <input name="website" defaultValue={merchant.website ?? ""} className={inputClass} />
-            </LabeledField>
             <LabeledField label={content.callbackBaseLabel}>
               <input name="callbackBase" defaultValue={merchant.callbackBase ?? ""} className={inputClass} />
             </LabeledField>
@@ -605,6 +658,153 @@ export default async function MerchantDetailPage({
           ) : (
             <div className="mt-4 rounded-[1.5rem] border border-line bg-white/75 p-5 text-sm leading-7 text-muted">
               {content.noReviewPermission}
+            </div>
+          )}
+        </article>
+
+        <article className={`${panelClass} p-6`}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.22em] text-muted">{content.usersEyebrow}</p>
+              <h2 className="mt-2 text-2xl font-semibold text-foreground">{content.usersTitle}</h2>
+            </div>
+            <span className="rounded-full border border-line bg-white px-3 py-1 text-xs text-muted">
+              {merchant.users.length}
+            </span>
+          </div>
+          <p className="mt-4 text-sm leading-7 text-muted">{content.usersDescription}</p>
+
+          {canReview ? (
+            <div className="mt-6 grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+              <form action={createMerchantUserAction} className="rounded-[1.5rem] border border-line bg-white/75 p-5">
+                <input type="hidden" name="merchantId" value={merchant.id} />
+                <input type="hidden" name="redirectTo" value={`/admin/merchants/${merchant.id}`} />
+                <h3 className="text-lg font-semibold text-foreground">{content.createUserTitle}</h3>
+                <div className="mt-4 grid gap-4">
+                  <LabeledField label={content.userNameLabel}>
+                    <input name="name" className={inputClass} />
+                  </LabeledField>
+                  <LabeledField label={content.userEmailLabel}>
+                    <input name="email" type="email" className={inputClass} />
+                  </LabeledField>
+                  <LabeledField label={content.userRoleLabel}>
+                    <select name="role" defaultValue="OWNER" className={inputClass}>
+                      {(["OWNER", "OPS", "DEVELOPER", "VIEWER"] as const).map((role) => (
+                        <option key={role} value={role}>
+                          {getMerchantDisplayRole(role, locale)}
+                        </option>
+                      ))}
+                    </select>
+                  </LabeledField>
+                  <LabeledField label={content.userPasswordLabel} hint={content.userPasswordHintCreate}>
+                    <input name="password" type="password" className={inputClass} />
+                  </LabeledField>
+                  <LabeledField label={content.userConfirmPasswordLabel}>
+                    <input name="confirmPassword" type="password" className={inputClass} />
+                  </LabeledField>
+                  <div className="rounded-[1.25rem] border border-line bg-white/70 p-4">
+                    <label className="flex items-center gap-3 text-sm font-medium text-foreground">
+                      <input
+                        type="checkbox"
+                        name="enabled"
+                        defaultChecked
+                        className="h-4 w-4 rounded border-line"
+                      />
+                      {content.userEnabledLabel}
+                    </label>
+                  </div>
+                </div>
+                <div className="mt-5">
+                  <button type="submit" className={buttonClass}>
+                    {content.createUserButton}
+                  </button>
+                </div>
+              </form>
+
+              <div className="space-y-4">
+                {merchant.users.length === 0 ? (
+                  <div className="rounded-[1.25rem] border border-dashed border-line p-6 text-sm leading-7 text-muted">
+                    {content.noUsers}
+                  </div>
+                ) : (
+                  merchant.users.map((user) => (
+                    <form
+                      key={user.id}
+                      action={updateMerchantUserAction}
+                      className="rounded-[1.25rem] border border-line bg-[#faf7f1] p-4"
+                    >
+                      <input type="hidden" name="id" value={user.id} />
+                      <input type="hidden" name="merchantId" value={merchant.id} />
+                      <input type="hidden" name="redirectTo" value={`/admin/merchants/${merchant.id}`} />
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-foreground">{user.name}</p>
+                          <p className="mt-1 text-xs text-muted">{user.email}</p>
+                        </div>
+                        <StatusBadge tone={user.enabled ? "success" : "danger"}>
+                          {user.enabled ? content.accountStatusEnabled : content.accountStatusDisabled}
+                        </StatusBadge>
+                      </div>
+                      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                        <LabeledField label={content.userNameLabel}>
+                          <input name="name" defaultValue={user.name} className={inputClass} />
+                        </LabeledField>
+                        <LabeledField label={content.userEmailLabel}>
+                          <input name="email" type="email" defaultValue={user.email} className={inputClass} />
+                        </LabeledField>
+                        <LabeledField label={content.userRoleLabel}>
+                          <select name="role" defaultValue={user.role} className={inputClass}>
+                            {(["OWNER", "OPS", "DEVELOPER", "VIEWER"] as const).map((role) => (
+                              <option key={role} value={role}>
+                                {getMerchantDisplayRole(role, locale)}
+                              </option>
+                            ))}
+                          </select>
+                        </LabeledField>
+                        <div className="rounded-[1.25rem] border border-line bg-white/70 p-4">
+                          <label className="flex items-center gap-3 text-sm font-medium text-foreground">
+                            <input
+                              type="checkbox"
+                              name="enabled"
+                              defaultChecked={user.enabled}
+                              className="h-4 w-4 rounded border-line"
+                            />
+                            {content.userEnabledLabel}
+                          </label>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                        <LabeledField label={content.userPasswordLabel} hint={content.userPasswordHintUpdate}>
+                          <input name="password" type="password" className={inputClass} />
+                        </LabeledField>
+                        <LabeledField label={content.userConfirmPasswordLabel}>
+                          <input name="confirmPassword" type="password" className={inputClass} />
+                        </LabeledField>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted">
+                        <span className="rounded-full border border-line bg-white px-3 py-1">
+                          {content.lastLoginCol} {formatDateTime(user.lastLoginAt, locale)}
+                        </span>
+                        <span className="rounded-full border border-line bg-white px-3 py-1">
+                          {content.loginCreatedAtCol} {formatDateTime(user.createdAt, locale)}
+                        </span>
+                      </div>
+                      <div className="mt-4">
+                        <button
+                          type="submit"
+                          className="rounded-xl border border-line bg-white px-3 py-2 text-xs font-medium text-foreground"
+                        >
+                          {content.saveUserButton}
+                        </button>
+                      </div>
+                    </form>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6 rounded-[1.25rem] border border-line bg-white/75 p-5 text-sm leading-7 text-muted">
+              {content.noUserManagePermission}
             </div>
           )}
         </article>

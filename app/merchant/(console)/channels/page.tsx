@@ -18,6 +18,7 @@ import {
   createMerchantChannelAccountAction,
   updateMerchantChannelAccountAction,
 } from "@/app/merchant/actions";
+import { CopyFieldList, type CopyFieldItem } from "@/app/merchant/copy-field-list";
 import {
   buildMerchantChannelCallbackUrl,
   getMerchantChannelTemplates,
@@ -31,6 +32,10 @@ import { getPrismaClient } from "@/lib/prisma";
 
 function firstValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function isCopyableChannelConfigKey(fieldName: string) {
+  return !/(key|secret|private|password|cert)/i.test(fieldName);
 }
 
 export default async function MerchantChannelsPage({
@@ -99,6 +104,13 @@ export default async function MerchantChannelsPage({
   const selectedTemplateBlockedByProfile =
     selectedTemplate.requiresMerchantProfileCompletion && hasProfileGaps;
   const selectedChannelHref = `/merchant/channels?channel=${selectedTemplate.channelCode}`;
+  const selectedDefaultReady = Boolean(
+    selectedDefaultBinding?.enabled &&
+      selectedAccounts.some(
+        (account) =>
+          account.id === selectedDefaultBinding.merchantChannelAccountId && account.enabled,
+      ),
+  );
   const content =
     locale === "en"
       ? {
@@ -151,6 +163,13 @@ export default async function MerchantChannelsPage({
           setDefaultInstance: "Set as default instance",
           saveButton: "Save Instance",
           saveDraftButton: "Save Draft Changes",
+          copyAreaTitle: "Copy integration values",
+          copyAreaDesc:
+            "Copy the values usually needed by upstream payment operations and internal handoff. Sensitive credential material remains masked and cannot be exported from the console.",
+          instanceIdLabel: "Instance ID",
+          channelCodeLabel: "Channel Code",
+          copyConfigHint:
+            "Only non-sensitive configured fields are exposed for copying here. Private keys, platform public keys, and similar secrets stay masked.",
         }
       : {
           eyebrow: "通道管理",
@@ -200,6 +219,13 @@ export default async function MerchantChannelsPage({
           setDefaultInstance: "设为默认实例",
           saveButton: "保存实例",
           saveDraftButton: "保存草稿修改",
+          copyAreaTitle: "参数复制区",
+          copyAreaDesc:
+            "这里集中放当前通道实例联调最常用的参数，便于直接复制给技术或运维。私钥、公钥、API v3 Key 等敏感值继续保持脱敏，不支持从控制台导出。",
+          instanceIdLabel: "实例 ID",
+          channelCodeLabel: "通道编码",
+          copyConfigHint:
+            "这里只展示可复制的非敏感已配置字段。私钥、公钥等敏感参数仍然只允许重新录入，不支持导出。",
         };
 
   return (
@@ -237,6 +263,15 @@ export default async function MerchantChannelsPage({
             {merchantChannelTemplates.map((template) => {
               const isActive = template.channelCode === selectedTemplate.channelCode;
               const defaultBinding = bindingsByChannel.get(template.channelCode);
+              const hasActiveDefault = Boolean(
+                defaultBinding?.enabled &&
+                  merchant.channelAccounts.some(
+                    (account) =>
+                      account.channelCode === template.channelCode &&
+                      account.id === defaultBinding.merchantChannelAccountId &&
+                      account.enabled,
+                  ),
+              );
 
               return (
                 <Link
@@ -262,7 +297,7 @@ export default async function MerchantChannelsPage({
                           : "border-line bg-white text-muted"
                       }`}
                     >
-                      {defaultBinding?.enabled ? content.defaultReady : content.defaultMissing}
+                      {hasActiveDefault ? content.defaultReady : content.defaultMissing}
                     </span>
                   </div>
                 </Link>
@@ -279,8 +314,8 @@ export default async function MerchantChannelsPage({
               <p className="text-xs uppercase tracking-[0.22em] text-muted">{content.createEyebrow}</p>
               <h2 className="mt-2 text-2xl font-semibold text-foreground">{selectedTemplate.title}</h2>
             </div>
-            <StatusBadge tone={selectedDefaultBinding?.enabled ? "success" : "warning"}>
-              {selectedDefaultBinding?.enabled ? content.defaultReady : content.defaultMissing}
+            <StatusBadge tone={selectedDefaultReady ? "success" : "warning"}>
+              {selectedDefaultReady ? content.defaultReady : content.defaultMissing}
             </StatusBadge>
           </div>
           <p className="mt-3 text-sm leading-7 text-muted">{selectedTemplate.description}</p>
@@ -408,7 +443,54 @@ export default async function MerchantChannelsPage({
                   account.id,
                   account.callbackToken,
                 );
-                const isDefault = selectedDefaultBinding?.merchantChannelAccountId === account.id;
+                const isDefault = Boolean(
+                  selectedDefaultBinding?.enabled &&
+                    selectedDefaultBinding.merchantChannelAccountId === account.id &&
+                    account.enabled,
+                );
+                const copyItems: CopyFieldItem[] = [
+                  {
+                    id: `${account.id}-instance-id`,
+                    label: content.instanceIdLabel,
+                    value: account.id,
+                  },
+                  {
+                    id: `${account.id}-channel-code`,
+                    label: content.channelCodeLabel,
+                    value: account.channelCode,
+                  },
+                  {
+                    id: `${account.id}-callback-url`,
+                    label: content.callbackUrl,
+                    value: callbackUrl,
+                    wide: true,
+                  },
+                  {
+                    id: `${account.id}-callback-token`,
+                    label: content.callbackToken,
+                    value: account.callbackToken,
+                  },
+                  ...selectedTemplate.fields.flatMap((field) => {
+                    const maskedValue = maskedConfig[field.key]?.trim();
+
+                    if (!maskedValue || !isCopyableChannelConfigKey(field.key)) {
+                      return [];
+                    }
+
+                    return [
+                      {
+                        id: `${account.id}-config-${field.key}`,
+                        label: field.label,
+                        value: maskedValue,
+                        multiline: field.multiline,
+                      } satisfies CopyFieldItem,
+                    ];
+                  }),
+                ];
+                const copyAllValue = copyItems
+                  .filter((item) => item.value?.trim())
+                  .map((item) => `${item.label}${locale === "en" ? ": " : "："}${item.value?.trim()}`)
+                  .join("\n\n");
 
                 return (
                   <form
@@ -431,26 +513,26 @@ export default async function MerchantChannelsPage({
                       </div>
                     </div>
 
-                    <div className="mt-4 rounded-[1.25rem] border border-line bg-[#faf7f1] p-4 text-sm leading-7 text-muted">
-                      <p>
-                        {content.callbackUrl}
-                        {locale === "en" ? ": " : "："}
-                        <span className="ml-2 break-all font-mono text-xs text-foreground">
-                          {callbackUrl}
-                        </span>
-                      </p>
-                      <p className="mt-2">
-                        {content.callbackToken}
-                        {locale === "en" ? ": " : "："}
-                        <span className="ml-2 font-mono text-xs text-foreground">
-                          {account.callbackToken}
-                        </span>
-                      </p>
-                      <p className="mt-2">{content.createdAt} {formatDateTime(account.createdAt, locale)}</p>
-                      <p className="mt-1">{content.updatedAt} {formatDateTime(account.updatedAt, locale)}</p>
-                      <p className="mt-1">{content.verifiedAt} {formatDateTime(account.lastVerifiedAt, locale)}</p>
+                    <div className="mt-4 rounded-[1.25rem] border border-line bg-[#faf7f1] p-4">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">{content.copyAreaTitle}</p>
+                        <p className="mt-2 text-sm leading-7 text-muted">{content.copyAreaDesc}</p>
+                      </div>
+                      <div className="mt-4">
+                        <CopyFieldList
+                          locale={locale}
+                          items={copyItems}
+                          copyAllValue={copyAllValue}
+                        />
+                      </div>
+                      <p className="mt-4 text-xs leading-6 text-muted">{content.copyConfigHint}</p>
+                      <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted">
+                        <span>{content.createdAt} {formatDateTime(account.createdAt, locale)}</span>
+                        <span>{content.updatedAt} {formatDateTime(account.updatedAt, locale)}</span>
+                        <span>{content.verifiedAt} {formatDateTime(account.lastVerifiedAt, locale)}</span>
+                      </div>
                       {account.lastErrorMessage ? (
-                        <p className="mt-2 text-[#9b3d18]">
+                        <p className="mt-3 text-sm leading-7 text-[#9b3d18]">
                           {content.lastError}
                           {locale === "en" ? ": " : "："}
                           {account.lastErrorMessage}
@@ -524,7 +606,9 @@ export default async function MerchantChannelsPage({
                             <input
                               type="checkbox"
                               name="setAsDefault"
-                              defaultChecked={isDefault}
+                              defaultChecked={
+                                selectedDefaultBinding?.merchantChannelAccountId === account.id
+                              }
                               className="h-4 w-4 rounded border-line"
                             />
                             {content.setDefaultInstance}
