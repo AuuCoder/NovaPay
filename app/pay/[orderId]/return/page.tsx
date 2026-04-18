@@ -11,7 +11,27 @@ import { getCurrentLocale } from "@/lib/i18n-server";
 import { getMerchantDisplayName } from "@/lib/merchant-profile-completion";
 import { getMerchantPaymentOrder } from "@/lib/orders/service";
 import { isTerminalPaymentStatus } from "@/lib/orders/status";
+import { isRecord } from "@/lib/payments/utils";
 import { getPrismaClient } from "@/lib/prisma";
+
+function getMetadataUrl(metadata: unknown, key: string) {
+  if (!isRecord(metadata)) {
+    return null;
+  }
+
+  const value = metadata[key];
+
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
 
 export default async function HostedPaymentReturnPage({
   params,
@@ -60,6 +80,9 @@ export default async function HostedPaymentReturnPage({
     redirect(order.returnUrl);
   }
 
+  const productUrl = getMetadataUrl(order.metadata, "productUrl");
+  const storefrontUrl = getMetadataUrl(order.metadata, "storefrontUrl");
+  const backToStoreUrl = productUrl ?? storefrontUrl;
   const merchantName = getMerchantDisplayName(order.merchant.name, locale);
   const content =
     locale === "en"
@@ -79,6 +102,8 @@ export default async function HostedPaymentReturnPage({
             "The payment is not completed yet or has been closed. If the provider page showed a risk or system message, confirm the latest tracked result here first, then return to the hosted cashier if needed.",
           refresh: "Refresh Status",
           retry: "Return to Cashier",
+          backToProduct: "Back to Product",
+          backToStore: "Back to Store",
         }
       : {
           title: "支付结果",
@@ -95,6 +120,8 @@ export default async function HostedPaymentReturnPage({
             "当前支付尚未完成或已关闭。若上游支付页刚才提示风险或系统异常，请先以这里的跟踪结果为准，再决定是否返回收银台重新发起支付。",
           refresh: "刷新状态",
           retry: "返回收银台",
+          backToProduct: "返回商品页",
+          backToStore: "返回商铺",
         };
 
   const hint =
@@ -157,6 +184,14 @@ export default async function HostedPaymentReturnPage({
             >
               {content.retry}
             </Link>
+          ) : null}
+          {backToStoreUrl ? (
+            <a
+              href={backToStoreUrl}
+              className="inline-flex items-center justify-center rounded-2xl border border-line bg-white px-4 py-2.5 text-sm font-medium text-foreground transition hover:border-accent hover:text-accent"
+            >
+              {productUrl ? content.backToProduct : content.backToStore}
+            </a>
           ) : null}
         </div>
       </div>

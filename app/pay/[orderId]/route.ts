@@ -102,8 +102,6 @@ function renderUsdtCheckoutPage(input: {
     typeof input.channelPayload?.networkLabel === "string" ? input.channelPayload.networkLabel : "USDT";
   const quoteRate =
     typeof input.channelPayload?.quoteRate === "string" ? input.channelPayload.quoteRate : null;
-  const quoteSource =
-    typeof input.channelPayload?.quoteSource === "string" ? input.channelPayload.quoteSource : null;
   const quoteExpiresAt =
     typeof input.channelPayload?.quoteExpiresAt === "string"
       ? new Date(input.channelPayload.quoteExpiresAt)
@@ -291,17 +289,6 @@ function renderUsdtCheckoutPage(input: {
         background: #0b946c;
         color: white;
       }
-      .code {
-        margin-top: 16px;
-        border-radius: 22px;
-        background: #f7faf8;
-        padding: 14px 16px;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 12px;
-        line-height: 1.8;
-        color: #365347;
-        word-break: break-all;
-      }
     </style>
   </head>
   <body>
@@ -326,10 +313,6 @@ function renderUsdtCheckoutPage(input: {
             <article class="meta-item">
               <p class="meta-label">应付 USDT</p>
               <p class="meta-value amount">${escapeHtml(quotedUsdtAmount ?? "--")} USDT</p>
-            </article>
-            <article class="meta-item">
-              <p class="meta-label">商品金额</p>
-              <p class="meta-value amount">${escapeHtml(formatAmount(input.amount, input.currency))}</p>
             </article>
             <article class="meta-item">
               <p class="meta-label">支付网络</p>
@@ -365,10 +348,6 @@ function renderUsdtCheckoutPage(input: {
               <p class="meta-value">${escapeHtml(quoteRate ? `1 USDT = ${quoteRate} CNY` : "待计算")}</p>
             </article>
             <article class="meta-item">
-              <p class="meta-label">报价来源</p>
-              <p class="meta-value">${escapeHtml(quoteSource || "system")}</p>
-            </article>
-            <article class="meta-item">
               <p class="meta-label">报价截止</p>
               <p class="meta-value">${escapeHtml(
                 effectiveExpireAt
@@ -384,10 +363,7 @@ function renderUsdtCheckoutPage(input: {
 
           <div class="actions">
             <a class="button primary" href="/pay/${escapeHtml(input.orderId)}/return">查看支付结果</a>
-            <a class="button" href="/merchant/orders">查看订单列表</a>
           </div>
-
-          <div class="code">${escapeHtml(receivingAddress || "未配置收款地址")}</div>
         </section>
       </div>
     </main>
@@ -399,6 +375,7 @@ function renderUsdtCheckoutPage(input: {
         const countdownNode = document.getElementById("countdown-value");
         const stateNode = document.getElementById("countdown-state");
         const refreshPath = ${JSON.stringify(refreshPath)};
+        const pollIntervalMs = 6000;
         let redirected = false;
 
         const formatRemaining = (milliseconds) => {
@@ -416,6 +393,26 @@ function renderUsdtCheckoutPage(input: {
           return [minutes, seconds]
             .map((value) => String(value).padStart(2, "0"))
             .join(":");
+        };
+
+        const reloadCheckoutPage = () => {
+          if (redirected) {
+            return;
+          }
+
+          redirected = true;
+          window.location.reload();
+        };
+
+        const scheduleStatusPoll = () => {
+          window.setTimeout(() => {
+            if (document.hidden || redirected) {
+              scheduleStatusPoll();
+              return;
+            }
+
+            reloadCheckoutPage();
+          }, pollIntervalMs);
         };
 
         const tick = () => {
@@ -452,6 +449,13 @@ function renderUsdtCheckoutPage(input: {
           window.setTimeout(tick, remaining <= 60000 ? 250 : 1000);
         };
 
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden) {
+            reloadCheckoutPage();
+          }
+        });
+
+        scheduleStatusPoll();
         tick();
       })();
     </script>`
