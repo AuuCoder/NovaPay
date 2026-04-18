@@ -91,6 +91,53 @@ function parseDateOrNull(text: string, fieldName: string) {
   return value;
 }
 
+function isHttpUrl(text: string) {
+  try {
+    const value = new URL(text);
+    return value.protocol === "http:" || value.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function validateSystemConfigValue(input: {
+  key: string;
+  label: string;
+  value: string;
+  kind: string;
+  required: boolean;
+}) {
+  if (input.required && !input.value) {
+    throw new Error(`${input.label || input.key} 不能为空。`);
+  }
+
+  if (!input.value) {
+    return;
+  }
+
+  if (input.kind === "url" && !isHttpUrl(input.value)) {
+    throw new Error(`${input.label || input.key} 必须是合法的 http/https URL。`);
+  }
+
+  if (input.kind === "integer") {
+    const numeric = Number(input.value);
+
+    if (!Number.isInteger(numeric) || numeric < 0) {
+      throw new Error(`${input.label || input.key} 必须是非负整数。`);
+    }
+
+    return;
+  }
+
+  if (input.kind === "number") {
+    const numeric = Number(input.value);
+
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      throw new Error(`${input.label || input.key} 必须是非负数字。`);
+    }
+  }
+}
+
 function parseAdminRole(text: string) {
   if (text in AdminRole) {
     return text as AdminRole;
@@ -710,6 +757,112 @@ export async function saveSystemConfigAction(formData: FormData) {
   }
 
   redirect(withMessage(redirectTo, "success", `系统配置 ${key} 已保存。`));
+}
+
+export async function saveSystemConfigBatchAction(formData: FormData) {
+  const session = await requireAdminPermission("system_config:write");
+  const redirectTo = getRedirectTo(formData, "/admin/system-config");
+  const batchLabel = getString(formData, "batchLabel");
+
+  try {
+    const keys = formData
+      .getAll("configKey")
+      .map((value) => (typeof value === "string" ? value.trim() : ""));
+    const groups = formData
+      .getAll("configGroup")
+      .map((value) => (typeof value === "string" ? value.trim() : ""));
+    const labels = formData
+      .getAll("configLabel")
+      .map((value) => (typeof value === "string" ? value.trim() : ""));
+    const values = formData
+      .getAll("configValue")
+      .map((value) => (typeof value === "string" ? value.trim() : ""));
+    const kinds = formData
+      .getAll("configKind")
+      .map((value) => (typeof value === "string" ? value.trim() : "text"));
+    const requiredFlags = formData
+      .getAll("configRequired")
+      .map((value) => (typeof value === "string" ? value.trim() : "false"));
+
+    if (
+      keys.length === 0 ||
+      keys.length !== groups.length ||
+      keys.length !== labels.length ||
+      keys.length !== values.length ||
+      keys.length !== kinds.length ||
+      keys.length !== requiredFlags.length
+    ) {
+      throw new Error("系统配置表单格式不正确，请刷新页面后重试。");
+    }
+
+    const payload = keys.map((key, index) => {
+      const label = labels[index] || key;
+      const value = values[index];
+      const kind = kinds[index] || "text";
+      const required = requiredFlags[index] === "true";
+
+      if (!key) {
+        throw new Error("存在缺失 Key 的系统配置项。");
+      }
+
+      validateSystemConfigValue({
+        key,
+        label,
+        value,
+        kind,
+        required,
+      });
+
+      return {
+        key,
+        group: groups[index] || "general",
+        label: label || null,
+        value,
+      };
+    });
+
+    const prisma = getPrismaClient();
+
+    await prisma.$transaction(
+      payload.map((config) =>
+        prisma.systemConfig.upsert({
+          where: {
+            key: config.key,
+          },
+          update: {
+            value: config.value,
+            group: config.group,
+            label: config.label,
+          },
+          create: {
+            key: config.key,
+            value: config.value,
+            group: config.group,
+            label: config.label,
+          },
+        }),
+      ),
+    );
+
+    await writeAdminAuditLog({
+      action: "system_config.batch_save",
+      resourceType: "system_config",
+      resourceId: batchLabel || payload[0]?.group || "batch",
+      actor: getAuditActor(session),
+      summary: `批量保存系统配置 ${batchLabel || payload[0]?.group || "batch"}。`,
+      metadata: {
+        batchLabel,
+        keys: payload.map((item) => item.key),
+      },
+    });
+
+    invalidateSystemConfigCache();
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", `系统配置 ${batchLabel || "批次"} 已保存。`));
 }
 
 export async function retryCallbackAction(formData: FormData) {

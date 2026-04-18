@@ -36,6 +36,7 @@ import {
   channelRequiresMerchantProfile,
 } from "@/lib/merchant-profile-completion";
 import { formatAmount } from "@/lib/payments/utils";
+import { normalizeUsdtReceivingAddress } from "@/lib/payments/usdt-address";
 import { getPrismaClient } from "@/lib/prisma";
 import { protectProviderConfigForStorage } from "@/lib/provider-account-config";
 import {
@@ -283,6 +284,75 @@ function getMerchantChannelTemplateOrThrow(channelCode: string) {
   return template;
 }
 
+function getChannelConfigAddress(config: unknown) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return null;
+  }
+
+  const record = config as Record<string, unknown>;
+  const candidate = record.walletAddress ?? record.receivingAddress ?? record.address;
+  return typeof candidate === "string" ? candidate : null;
+}
+
+async function assertUsdtChannelAddressAvailable(input: {
+  channelCode: string;
+  walletAddress: string;
+  excludeAccountId?: string;
+}) {
+  const template = getMerchantChannelTemplate(input.channelCode);
+
+  if (!template || template.providerKey !== "crypto") {
+    return;
+  }
+
+  const prisma = getPrismaClient();
+  const accounts = await prisma.merchantChannelAccount.findMany({
+    where: {
+      channelCode: input.channelCode,
+      ...(input.excludeAccountId
+        ? {
+            id: {
+              not: input.excludeAccountId,
+            },
+          }
+        : {}),
+    },
+    select: {
+      id: true,
+      displayName: true,
+      merchant: {
+        select: {
+          code: true,
+          name: true,
+        },
+      },
+      config: true,
+    },
+  });
+
+  const duplicate = accounts.find((account) => {
+    const existingAddress = getChannelConfigAddress(account.config);
+
+    if (!existingAddress) {
+      return false;
+    }
+
+    try {
+      return (
+        normalizeUsdtReceivingAddress(input.channelCode, existingAddress) === input.walletAddress
+      );
+    } catch {
+      return false;
+    }
+  });
+
+  if (duplicate) {
+    throw new Error(
+      `该收款地址已被商户 ${duplicate.merchant.name}（${duplicate.merchant.code}）的通道实例 ${duplicate.displayName} 占用，请使用当前商户独立的链上地址。`,
+    );
+  }
+}
+
 function readMerchantChannelConfig(channelCode: string, formData: FormData) {
   const template = getMerchantChannelTemplateOrThrow(channelCode);
   const config: Record<string, string> = {};
@@ -295,6 +365,18 @@ function readMerchantChannelConfig(channelCode: string, formData: FormData) {
     }
 
     config[field.key] = value;
+  }
+
+  if (template.providerKey === "crypto") {
+    try {
+      config.walletAddress = normalizeUsdtReceivingAddress(template.channelCode, config.walletAddress);
+    } catch {
+      throw new Error(
+        template.channelCode === "usdt.sol"
+          ? "Solana 收款地址格式不正确。"
+          : "EVM 收款地址格式不正确，请检查是否为 0x 开头的正确链上地址。",
+      );
+    }
   }
 
   return {
@@ -1035,6 +1117,13 @@ export async function createMerchantChannelAccountAction(formData: FormData) {
     const displayName = getRequiredString(formData, "displayName", "通道名称");
     const { template, config } = readMerchantChannelConfig(channelCode, formData);
 
+    if (template.providerKey === "crypto") {
+      await assertUsdtChannelAddressAvailable({
+        channelCode: template.channelCode,
+        walletAddress: config.walletAddress,
+      });
+    }
+
     const account = await prisma.merchantChannelAccount.create({
       data: {
         merchantId: session.merchantUser.merchantId,
@@ -1127,6 +1216,14 @@ export async function updateMerchantChannelAccountAction(formData: FormData) {
     }
 
     const { template, config } = readMerchantChannelConfig(existing.channelCode, formData);
+
+    if (template.providerKey === "crypto") {
+      await assertUsdtChannelAddressAvailable({
+        channelCode: template.channelCode,
+        walletAddress: config.walletAddress,
+        excludeAccountId: existing.id,
+      });
+    }
 
     const account = await prisma.merchantChannelAccount.update({
       where: {

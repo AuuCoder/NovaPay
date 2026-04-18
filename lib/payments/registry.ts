@@ -1,10 +1,18 @@
 import { alipayPageProvider } from "@/lib/payments/providers/alipay-page";
+import {
+  usdtBaseProvider,
+  usdtBscProvider,
+  usdtSolProvider,
+} from "@/lib/payments/providers/usdt-onchain";
 import { wxpayNativeProvider } from "@/lib/payments/providers/wxpay-native";
 import { normalizePaymentChannelCode } from "@/lib/payments/channel-codes";
 import type { PaymentChannelCode, PaymentProvider } from "@/lib/payments/types";
 
-const providers: Record<PaymentChannelCode, PaymentProvider> = {
+const providers: Partial<Record<PaymentChannelCode, PaymentProvider>> = {
   "alipay.page": alipayPageProvider,
+  "usdt.base": usdtBaseProvider,
+  "usdt.bsc": usdtBscProvider,
+  "usdt.sol": usdtSolProvider,
   "wxpay.native": wxpayNativeProvider,
 };
 

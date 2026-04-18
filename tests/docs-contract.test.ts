@@ -19,11 +19,17 @@ test(".env example keeps payment channel secrets out of platform env vars", () =
 
 test("merchant-facing docs explain dynamic callbacks and self-managed channel config", () => {
   const readme = readFixture("../README.md");
+  const readmeZh = readFixture("../README.zh-CN.md");
   const examples = readFixture("../docs/merchant-integration-examples.md");
   const runbook = readFixture("../docs/production-runbook.md");
 
-  assert.match(readme, /商户不需要也不能传 `notifyUrl`/);
-  assert.match(readme, /`\.env` 只保留平台级配置，不再填写 `ALIPAY_\*` \/ `WXPAY_\*`/);
+  assert.match(readme, /Merchants do not need to and must not send `notifyUrl`/);
+  assert.match(
+    readme,
+    /`\.env` should only contain platform-level settings, not merchant production payment secrets\./,
+  );
+  assert.match(readmeZh, /商户不需要也不能(?:主动)?传 `notifyUrl`/);
+  assert.match(readmeZh, /`\.env` 只保留平台级配置/);
   assert.match(examples, /商户不需要也不能传 `notifyUrl`/);
   assert.match(
     examples,

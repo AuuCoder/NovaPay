@@ -36,6 +36,13 @@ enum CallbackAttemptStatus {
   FAILED
 }
 
+enum OnchainDepositStatus {
+  DETECTED
+  CONFIRMED
+  MATCHED
+  IGNORED
+}
+
 enum AdminRole {
   SUPER_ADMIN
   OPS_ADMIN
@@ -158,6 +165,7 @@ model MerchantChannelAccount {
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
   bindings          MerchantChannelBinding[]
+  onchainDeposits   OnchainDeposit[]
   paymentOrders     PaymentOrder[]
   paymentRefunds    PaymentRefund[]
 
@@ -307,6 +315,12 @@ model PaymentOrder {
   subject              String
   description          String?
   amount               Decimal                @db.Decimal(18, 2)
+  payableAmount        Decimal?               @db.Decimal(24, 6)
+  payableCurrency      String?                @db.VarChar(8)
+  quoteRate            Decimal?               @db.Decimal(18, 6)
+  quoteSource          String?
+  quoteSpreadBps       Int?
+  quoteExpiresAt       DateTime?
   feeRateSnapshot      Decimal                @default(0) @db.Decimal(8, 4)
   feeAmount            Decimal                @default(0) @db.Decimal(18, 2)
   netAmount            Decimal                @default(0) @db.Decimal(18, 2)
@@ -332,6 +346,7 @@ model PaymentOrder {
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
   callbackAttempts     PaymentCallbackAttempt[]
+  onchainDeposits      OnchainDeposit[]
   refunds              PaymentRefund[]
   ledgerEntries        MerchantLedgerEntry[]
 
@@ -342,6 +357,35 @@ model PaymentOrder {
   @@index([merchantChannelAccountId, createdAt])
   @@index([apiCredentialId, createdAt])
   @@index([callbackStatus, nextCallbackAt])
+  @@index([quoteExpiresAt, createdAt])
+}
+
+model OnchainDeposit {
+  id                    String               @id @default(cuid())
+  chainCode             String
+  tokenCode             String               @default("USDT")
+  merchantChannelAccountId String?
+  merchantChannelAccount MerchantChannelAccount? @relation(fields: [merchantChannelAccountId], references: [id], onDelete: SetNull)
+  paymentOrderId        String?
+  paymentOrder          PaymentOrder?        @relation(fields: [paymentOrderId], references: [id], onDelete: SetNull)
+  recipientAddress      String
+  amount                Decimal              @db.Decimal(24, 6)
+  txHash                String
+  txIndex               String               @default("0")
+  blockNumber           BigInt?
+  confirmations         Int                  @default(0)
+  requiredConfirmations Int                  @default(0)
+  status                OnchainDepositStatus @default(DETECTED)
+  observedAt            DateTime             @default(now())
+  confirmedAt           DateTime?
+  rawPayload            Json?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  @@unique([chainCode, txHash, txIndex])
+  @@index([merchantChannelAccountId, status, observedAt])
+  @@index([paymentOrderId, status, observedAt])
+  @@index([status, chainCode, observedAt])
 }
 
 model PaymentRefund {

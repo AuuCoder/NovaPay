@@ -49,6 +49,45 @@ curl -X POST "http://localhost:3000/api/payment-orders" \
 - `x-novapay-nonce` 用于防重放，每次请求都应重新生成
 - `Idempotency-Key` 用于业务安全重试；同一业务重试时应保持不变
 
+## USDT On-chain Order Example
+
+如果商户要使用链上 USDT，把 `channelCode` 改成：
+
+- `usdt.bsc`
+- `usdt.base`
+- `usdt.sol`
+
+示例请求体：
+
+```json
+{
+  "merchantCode": "merchant-prod-cn-001",
+  "channelCode": "usdt.bsc",
+  "externalOrderId": "ORDER-20260418-001",
+  "amount": "88.00",
+  "subject": "NovaPay USDT Order",
+  "description": "USDT on BSC"
+}
+```
+
+典型响应里除了普通订单字段，还会重点返回：
+
+- `hostedCheckoutUrl`：NovaPay 托管支付页地址
+- `payableAmount`：本次应付的精确 USDT 金额
+- `payableCurrency`：通常为 `USDT`
+- `quoteRate`：本次锁定的 USDT/CNY 汇率
+- `quoteSource`：汇率来源
+- `quoteExpiresAt`：报价失效时间
+- `providerPayload.receivingAddress`：本次收款地址
+- `providerPayload.networkLabel`：链路名称
+
+商户接入注意事项：
+
+1. 页面上必须引导用户按“精确金额 + 正确链路”付款
+2. 最终支付结果以 NovaPay 回调或主动查单为准，不要只依赖钱包是否已广播
+3. 同一个商户如果同时支持多个 `usdt.*` 通道，前端可以合并显示为一个 “USDT” 分组，但下单传给 NovaPay 的 `channelCode` 仍然必须是具体链路
+4. 商户自己的收款地址配置在 NovaPay 商户控制台，不在 NoveShop 或平台 `.env`
+
 ## Verify Merchant Callback
 
 NovaPay 回调商户时使用 `notifySecret` 进行签名：

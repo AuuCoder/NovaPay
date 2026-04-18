@@ -1,4 +1,7 @@
-import { buildMerchantChannelCallbackUrl } from "@/lib/merchant-channel-accounts";
+import {
+  buildMerchantChannelCallbackUrl,
+  supportsMerchantChannelCallbackRoute,
+} from "@/lib/merchant-channel-accounts";
 import { AppError } from "@/lib/errors";
 import { revealProviderConfigForRuntime } from "@/lib/provider-account-config";
 import { getPrismaClient } from "@/lib/prisma";
@@ -8,7 +11,7 @@ import type { ProviderAccountConfig } from "@/lib/payments/types";
 interface ResolvedMerchantChannelRoute {
   account: ProviderAccountConfig;
   feeRate: string | null;
-  notifyUrl: string;
+  notifyUrl: string | null;
   sourceType: "merchant";
 }
 
@@ -49,6 +52,14 @@ function normalizeMerchantChannelAccount(
 }
 
 function resolveNotifyUrl(account: ProviderAccountConfig | null) {
+  if (!account) {
+    throw new Error("Merchant channel callback route is not configured.");
+  }
+
+  if (!supportsMerchantChannelCallbackRoute(account.channelCode)) {
+    return null;
+  }
+
   if (!account || !account.callbackToken) {
     throw new Error("Merchant channel callback route is not configured.");
   }

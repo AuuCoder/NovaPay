@@ -28,5 +28,14 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "novapay-onchain-worker",
+      script: "npm",
+      args: "run onchain:worker",
+      cwd: __dirname,
+      env: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };

@@ -21,6 +21,8 @@
     "callbacks:worker": "tsx scripts/callback-retry-worker.ts",
     "finance:sync-once": "tsx scripts/finance-worker.ts --once",
     "finance:worker": "tsx scripts/finance-worker.ts",
+    "onchain:sync-once": "tsx scripts/onchain-worker.ts --once",
+    "onchain:worker": "tsx scripts/onchain-worker.ts",
     "env:check:prod": "NODE_ENV=production node --import tsx scripts/check-production-env.ts"
   },
   "dependencies": {

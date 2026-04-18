@@ -29,6 +29,9 @@ NovaPay 适合这些场景：
 - `nonce` 防重放、Idempotency-Key、安全重试
 - 商户 API IP 白名单
 - 通道绑定、实例路由、托管支付页
+- 商户自有 BSC / Base / Solana 链 USDT 收款地址
+- USDT 锁价、精确应付金额分配、托管链上支付页
+- USDT 链上到账扫描与匹配 worker
 - 支付订单创建、查询、关闭
 - 退款创建、查询
 - 商户回调重试 worker
@@ -39,12 +42,17 @@ NovaPay 适合这些场景：
 
 - `alipay.page`
 - `wxpay.native`
+- `usdt.bsc`
+- `usdt.base`
+- `usdt.sol`
 
 说明：
 
 - 支付通道参数不再放在平台 `.env` 中统一维护。
 - 每个商户都应该在自己的后台维护各自的支付实例。
 - 系统会为每个通道实例生成独立的上游支付回调地址。
+- USDT 通道使用商户自有收款地址、精确应付金额和独立的 `onchain-worker`。
+- 不同商户在同一条链上不应复用同一个收款地址。
 
 ## 设计原则
 
@@ -113,11 +121,12 @@ npm run db:push
 npm run dev
 ```
 
-### 7. 如需验证完整回调与财务链路，再启动两个 worker
+### 7. 如需验证完整回调、财务与 USDT 链上链路，再启动三个 worker
 
 ```bash
 npm run callbacks:worker
 npm run finance:worker
+npm run onchain:worker
 ```
 
 ### 8. 打开这些入口
@@ -178,11 +187,11 @@ hex(hmac_sha256(apiSecret, "{timestamp}.{nonce}.{rawBody}"))
 ```json
 {
   "merchantCode": "merchant-prod-cn-001",
-  "channelCode": "alipay.page",
+  "channelCode": "usdt.bsc",
   "externalOrderId": "ORDER-20260410-001",
   "amount": "88.00",
   "subject": "NovaPay Production Order",
-  "description": "Alipay page payment"
+  "description": "USDT 链上支付"
 }
 ```
 
@@ -219,6 +228,8 @@ npm run callbacks:retry-once
 npm run callbacks:worker
 npm run finance:sync-once
 npm run finance:worker
+npm run onchain:sync-once
+npm run onchain:worker
 
 npm run env:check:prod
 ```
@@ -235,6 +246,7 @@ npm run env:check:prod
 6. 额外常驻运行：
    `npm run callbacks:worker`
    `npm run finance:worker`
+   `npm run onchain:worker`（只要启用了任意 `usdt.*` 通道就必须运行）
 
 生产注意事项：
 
@@ -242,10 +254,12 @@ npm run env:check:prod
 - 反向代理要正确透传 `x-forwarded-for`。
 - 不要在生产环境使用 `db:push` 或 `migrate dev`。
 - 商户支付参数应只存放在数据库的商户实例配置中。
+- 如启用 USDT 通道，必须先配置链 RPC / Token / Mint 参数，并保证每个商户在每条链上使用独立地址。
 
 完整部署说明见：
 
 - [生产运行手册](./docs/production-runbook.md)
+- [商户接入示例](./docs/merchant-integration-examples.md)
 
 ## 开源发布与安全
 

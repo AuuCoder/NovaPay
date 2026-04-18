@@ -30,6 +30,14 @@ function formatStoredAmount(value: { toString(): string }) {
   return Number(value.toString()).toFixed(2);
 }
 
+function formatStoredVariableAmount(value?: { toString(): string } | null) {
+  if (!value) {
+    return null;
+  }
+
+  return value.toString();
+}
+
 export function serializePaymentOrder(
   order: MerchantPaymentOrder,
   options?: {
@@ -54,10 +62,16 @@ export function serializePaymentOrder(
     externalOrderId: order.externalOrderId,
     channelCode: order.channelCode,
     amount: formatStoredAmount(order.amount),
+    payableAmount: formatStoredVariableAmount(order.payableAmount),
+    payableCurrency: order.payableCurrency,
     feeRate: formatStoredRate(order.feeRateSnapshot),
     feeAmount: formatStoredAmount(order.feeAmount),
     netAmount: formatStoredAmount(order.netAmount),
     currency: order.currency,
+    quoteRate: formatStoredVariableAmount(order.quoteRate),
+    quoteSource: order.quoteSource,
+    quoteSpreadBps: order.quoteSpreadBps,
+    quoteExpiresAt: order.quoteExpiresAt,
     subject: order.subject,
     description: order.description,
     status: order.status,

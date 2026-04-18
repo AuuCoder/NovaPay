@@ -5,7 +5,10 @@ import { AppError } from "@/lib/errors";
 import { calculatePaymentFeeSnapshot } from "@/lib/finance/calculations";
 import { syncPaymentOrderLedgerEntries } from "@/lib/finance/ledger";
 import { getMerchantProfileMissingFieldsForChannel } from "@/lib/merchant-profile-completion";
-import { normalizePaymentChannelCode } from "@/lib/payments/channel-codes";
+import {
+  isUsdtPaymentChannelCode,
+  normalizePaymentChannelCode,
+} from "@/lib/payments/channel-codes";
 import { getPaymentProvider } from "@/lib/payments/registry";
 import {
   getPaymentRuntimeAccountBySelection,
@@ -32,9 +35,22 @@ const paymentOrderDetailInclude = {
   },
 } satisfies Prisma.PaymentOrderInclude;
 
+const DEFAULT_PAYMENT_EXPIRE_MINUTES = 30;
+const DEFAULT_USDT_QUOTE_TTL_SECONDS = 900;
+const DEFAULT_EXPIRED_ORDER_SWEEP_BATCH_SIZE = 50;
+
 export type MerchantPaymentOrder = Prisma.PaymentOrderGetPayload<{
   include: typeof paymentOrderDetailInclude;
 }>;
+
+function parsePositiveInteger(raw: string | undefined, fallback: number) {
+  if (!raw) {
+    return fallback;
+  }
+
+  const numeric = Number(raw);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : fallback;
+}
 
 async function requireMerchantRuntimeAccount(order: {
   id: string;
@@ -68,6 +84,50 @@ function toJsonValue(
   value: Record<string, unknown> | Prisma.InputJsonValue | undefined | null,
 ) {
   return value as Prisma.InputJsonValue | undefined;
+}
+
+function getQuotedPaymentFields(value: Record<string, unknown> | null | undefined) {
+  if (!value) {
+    return {};
+  }
+
+  const payableAmount =
+    typeof value.quotedUsdtAmount === "string" && value.quotedUsdtAmount.trim()
+      ? value.quotedUsdtAmount
+      : null;
+  const payableCurrency =
+    typeof value.tokenSymbol === "string" && value.tokenSymbol.trim()
+      ? value.tokenSymbol.trim()
+      : null;
+  const quoteRate =
+    typeof value.quoteRate === "string" && value.quoteRate.trim()
+      ? value.quoteRate.trim()
+      : null;
+  const quoteSource =
+    typeof value.quoteSource === "string" && value.quoteSource.trim()
+      ? value.quoteSource.trim()
+      : null;
+  const quoteSpreadBps =
+    typeof value.quoteSpreadBps === "number" && Number.isInteger(value.quoteSpreadBps)
+      ? value.quoteSpreadBps
+      : typeof value.quoteSpreadBps === "string" && value.quoteSpreadBps.trim()
+        ? Number(value.quoteSpreadBps)
+        : null;
+  const quoteExpiresAt =
+    typeof value.quoteExpiresAt === "string" && value.quoteExpiresAt.trim()
+      ? new Date(value.quoteExpiresAt)
+      : null;
+
+  return {
+    payableAmount,
+    payableCurrency,
+    quoteRate,
+    quoteSource,
+    quoteSpreadBps:
+      quoteSpreadBps !== null && Number.isInteger(quoteSpreadBps) ? quoteSpreadBps : null,
+    quoteExpiresAt:
+      quoteExpiresAt && !Number.isNaN(quoteExpiresAt.getTime()) ? quoteExpiresAt : null,
+  };
 }
 
 function getCallbackTarget(order: {
@@ -174,6 +234,146 @@ async function loadPaymentOrderById(id: string) {
   });
 }
 
+async function buildPaymentExpireAt(channelCode: string) {
+  if (isUsdtPaymentChannelCode(channelCode)) {
+    const quoteTtlRaw = await getSystemConfig("USDT_QUOTE_TTL_SECONDS");
+    const quoteTtlSeconds = parsePositiveInteger(
+      quoteTtlRaw,
+      DEFAULT_USDT_QUOTE_TTL_SECONDS,
+    );
+    return new Date(Date.now() + quoteTtlSeconds * 1_000);
+  }
+
+  const expireMinutesRaw = await getSystemConfig("PAYMENT_EXPIRE_MINUTES");
+  const expireMinutes = parsePositiveInteger(
+    expireMinutesRaw,
+    DEFAULT_PAYMENT_EXPIRE_MINUTES,
+  );
+  return new Date(Date.now() + expireMinutes * 60_000);
+}
+
+function buildExpiredPaymentNotification(
+  order: MerchantPaymentOrder,
+  source: string,
+  extraPayload?: Record<string, unknown>,
+): PaymentNotification {
+  return {
+    orderId: order.id,
+    gatewayOrderId: order.gatewayOrderId,
+    providerStatus: "ORDER_EXPIRED",
+    amount: order.amount.toString(),
+    paidAt: null,
+    succeeds: false,
+    rawPayload: {
+      source,
+      expireAt: order.expireAt?.toISOString() ?? null,
+      ...extraPayload,
+    },
+  };
+}
+
+export async function expirePaymentOrderIfNeeded(
+  order: MerchantPaymentOrder,
+  source = "expiry_check",
+) {
+  if (isTerminalPaymentStatus(order.status)) {
+    return order;
+  }
+
+  if (!order.expireAt || order.expireAt.getTime() > Date.now()) {
+    return order;
+  }
+
+  let currentOrder = order;
+  const provider = getPaymentProvider(currentOrder.channelCode);
+
+  if (provider?.queryPayment) {
+    try {
+      currentOrder = await syncPaymentOrderFromProvider(currentOrder);
+    } catch {
+      currentOrder = (await loadPaymentOrderById(currentOrder.id)) ?? currentOrder;
+    }
+
+    if (isTerminalPaymentStatus(currentOrder.status)) {
+      return currentOrder;
+    }
+  }
+
+  if (!currentOrder.expireAt || currentOrder.expireAt.getTime() > Date.now()) {
+    return currentOrder;
+  }
+
+  if (!provider?.closePayment) {
+    await applyPaymentNotification(buildExpiredPaymentNotification(currentOrder, source));
+    return (await loadPaymentOrderById(currentOrder.id)) ?? currentOrder;
+  }
+
+  try {
+    const providerAccount = await requireMerchantRuntimeAccount(currentOrder);
+    const notification = await provider.closePayment({
+      ...toPaymentOperationInput(currentOrder),
+      account: providerAccount,
+    });
+
+    await applyPaymentNotification(notification);
+  } catch (error) {
+    await applyPaymentNotification(
+      buildExpiredPaymentNotification(currentOrder, source, {
+        closeError: error instanceof Error ? error.message : "Unknown close error",
+      }),
+    );
+  }
+
+  return (await loadPaymentOrderById(currentOrder.id)) ?? currentOrder;
+}
+
+export async function closeExpiredPaymentOrders(input?: { batchSize?: number }) {
+  const prisma = getPrismaClient();
+  const expiredOrders = await prisma.paymentOrder.findMany({
+    where: {
+      status: {
+        in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING],
+      },
+      expireAt: {
+        lte: new Date(),
+      },
+    },
+    include: paymentOrderDetailInclude,
+    orderBy: [{ expireAt: "asc" }, { createdAt: "asc" }],
+    take: input?.batchSize ?? DEFAULT_EXPIRED_ORDER_SWEEP_BATCH_SIZE,
+  });
+
+  let cancelled = 0;
+  let succeededAfterSync = 0;
+  let failed = 0;
+
+  for (const order of expiredOrders) {
+    try {
+      const updatedOrder = await expirePaymentOrderIfNeeded(order, "expiry_worker");
+
+      if (updatedOrder.status === PaymentStatus.SUCCEEDED) {
+        succeededAfterSync += 1;
+      } else if (updatedOrder.status === PaymentStatus.CANCELLED) {
+        cancelled += 1;
+      }
+    } catch (error) {
+      failed += 1;
+      console.error(
+        `[payment-expiry] failed to expire order ${order.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  return {
+    scanned: expiredOrders.length,
+    cancelled,
+    succeededAfterSync,
+    failed,
+  };
+}
+
 function toPaymentOperationInput(order: MerchantPaymentOrder) {
   return {
     orderId: order.id,
@@ -247,13 +447,14 @@ export async function getMerchantPaymentOrder(input: {
   orderReference: string;
   syncWithProvider?: boolean;
 }) {
-  const order = await getMerchantPaymentOrderByReference(input);
+  let order = await getMerchantPaymentOrderByReference(input);
 
   if (input.syncWithProvider === false) {
-    return order;
+    return expirePaymentOrderIfNeeded(order, "merchant_lookup");
   }
 
-  return syncPaymentOrderFromProvider(order);
+  order = await syncPaymentOrderFromProvider(order);
+  return expirePaymentOrderIfNeeded(order, "merchant_lookup");
 }
 
 export async function closeMerchantPaymentOrder(input: {
@@ -374,8 +575,7 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
     );
   }
 
-  const expireMinutes = Number((await getSystemConfig("PAYMENT_EXPIRE_MINUTES")) ?? 30);
-  const expireAt = new Date(Date.now() + expireMinutes * 60_000);
+  const expireAt = await buildPaymentExpireAt(normalizedChannelCode);
 
   const order = await prisma.paymentOrder.create({
     data: {
@@ -426,6 +626,7 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
         gatewayOrderId: payment.gatewayOrderId,
         providerStatus: payment.providerStatus,
         checkoutUrl: payment.checkoutUrl,
+        ...getQuotedPaymentFields(payment.providerPayload),
         channelPayload: toJsonValue({
           mode: payment.mode,
           ...payment.providerPayload,

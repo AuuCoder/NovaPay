@@ -29,6 +29,9 @@ If you view the whole stack as separate systems:
 - Nonce-based replay protection and Idempotency-Key support
 - Merchant API IP allowlists
 - Channel bindings, instance routing, and hosted checkout pages
+- Merchant-owned USDT receiving addresses on BSC / Base / Solana
+- USDT quote lock, exact payable amount allocation, and hosted on-chain checkout pages
+- On-chain deposit scanning and matching worker for USDT channels
 - Payment order creation, query, and close flows
 - Refund creation and query flows
 - Merchant callback retry worker
@@ -39,12 +42,17 @@ If you view the whole stack as separate systems:
 
 - `alipay.page`
 - `wxpay.native`
+- `usdt.bsc`
+- `usdt.base`
+- `usdt.sol`
 
 Notes:
 
 - Channel credentials are no longer maintained centrally in the platform `.env`.
 - Each merchant is expected to manage its own payment instances in the merchant console.
 - The system generates a distinct upstream payment callback URL for each channel instance.
+- USDT channels use merchant-owned receiving addresses, exact payable amounts, and a separate `onchain-worker`.
+- Different merchants should not reuse the same receiving address on the same chain.
 
 ## Design Principles
 
@@ -113,11 +121,12 @@ npm run db:push
 npm run dev
 ```
 
-### 7. Start workers if you need full callback and finance flows
+### 7. Start workers if you need full callback, finance, and USDT on-chain flows
 
 ```bash
 npm run callbacks:worker
 npm run finance:worker
+npm run onchain:worker
 ```
 
 ### 8. Open these entry points
@@ -178,11 +187,11 @@ Example request body:
 ```json
 {
   "merchantCode": "merchant-prod-cn-001",
-  "channelCode": "alipay.page",
+  "channelCode": "usdt.bsc",
   "externalOrderId": "ORDER-20260410-001",
   "amount": "88.00",
   "subject": "NovaPay Production Order",
-  "description": "Alipay page payment"
+  "description": "USDT on-chain payment"
 }
 ```
 
@@ -219,6 +228,8 @@ npm run callbacks:retry-once
 npm run callbacks:worker
 npm run finance:sync-once
 npm run finance:worker
+npm run onchain:sync-once
+npm run onchain:worker
 
 npm run env:check:prod
 ```
@@ -235,6 +246,7 @@ Recommended production flow:
 6. Also run continuously:
    `npm run callbacks:worker`
    `npm run finance:worker`
+   `npm run onchain:worker` (required when any `usdt.*` channel is enabled)
 
 Production notes:
 
@@ -242,10 +254,12 @@ Production notes:
 - Your reverse proxy must forward `x-forwarded-for` correctly.
 - Do not use `db:push` or `migrate dev` in production.
 - Merchant payment credentials should live only in merchant instance records in the database.
+- If any USDT channel is enabled, configure chain RPC / token settings first and keep each merchant on a distinct address per chain.
 
 For the full deployment guide:
 
 - [Production Runbook](./docs/production-runbook.md)
+- [Merchant Integration Examples](./docs/merchant-integration-examples.md)
 
 ## Open Source and Security
 

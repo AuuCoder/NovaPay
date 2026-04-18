@@ -29,7 +29,7 @@ export function resolvePaymentStatusFromNotification(
     return PaymentStatus.SUCCEEDED;
   }
 
-  if (/CLOSE|CANCEL/i.test(providerStatus)) {
+  if (/CLOSE|CANCEL|EXPIRE/i.test(providerStatus)) {
     return currentStatus === PaymentStatus.SUCCEEDED ? currentStatus : PaymentStatus.CANCELLED;
   }
 

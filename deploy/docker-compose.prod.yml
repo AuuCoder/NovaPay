@@ -93,5 +93,17 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  onchain-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run onchain:worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   novapay-postgres-data:

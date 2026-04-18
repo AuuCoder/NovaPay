@@ -15,6 +15,24 @@ export function getPaymentChannelOptions(locale: Locale = "zh") {
           title: "WeChat Native QR",
           detail: "Returns a `code_url` for the frontend to render as a QR code.",
         },
+        {
+          code: "usdt.bsc",
+          providerKey: "crypto",
+          title: "USDT on BSC",
+          detail: "Merchant-owned BSC USDT receiving address with hosted checkout, quote lock, and on-chain matching.",
+        },
+        {
+          code: "usdt.base",
+          providerKey: "crypto",
+          title: "USDT on Base",
+          detail: "Merchant-owned Base USDT receiving address with hosted checkout, quote lock, and on-chain matching.",
+        },
+        {
+          code: "usdt.sol",
+          providerKey: "crypto",
+          title: "USDT on Solana",
+          detail: "Merchant-owned Solana USDT receiving address with hosted checkout, quote lock, and on-chain matching.",
+        },
       ]
     : [
         {
@@ -28,6 +46,24 @@ export function getPaymentChannelOptions(locale: Locale = "zh") {
           providerKey: "wxpay",
           title: "微信 Native 扫码",
           detail: "返回 code_url，前端需渲染二维码供扫码支付。",
+        },
+        {
+          code: "usdt.bsc",
+          providerKey: "crypto",
+          title: "USDT · BSC",
+          detail: "商户自有 BSC 链 USDT 收款地址，已支持托管收银页、锁价和链上到账匹配。",
+        },
+        {
+          code: "usdt.base",
+          providerKey: "crypto",
+          title: "USDT · Base",
+          detail: "商户自有 Base 链 USDT 收款地址，已支持托管收银页、锁价和链上到账匹配。",
+        },
+        {
+          code: "usdt.sol",
+          providerKey: "crypto",
+          title: "USDT · Solana",
+          detail: "商户自有 Solana 链 USDT 收款地址，已支持托管收银页、锁价和链上到账匹配。",
         },
       ];
 }

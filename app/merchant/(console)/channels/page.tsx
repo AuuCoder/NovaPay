@@ -23,6 +23,7 @@ import {
   buildMerchantChannelCallbackUrl,
   getMerchantChannelTemplates,
   maskMerchantChannelConfig,
+  supportsMerchantChannelCallbackRoute,
 } from "@/lib/merchant-channel-accounts";
 import { getMerchantProfileMissingFields } from "@/lib/merchant-profile-completion";
 import { getCurrentLocale } from "@/lib/i18n-server";
@@ -135,6 +136,8 @@ export default async function MerchantChannelsPage({
           generatedTitle: "NovaPay will generate automatically after creation:",
           generatedFirst: "1. A dedicated upstream payment callback URL for this merchant channel instance",
           generatedSecond: "2. A unique upstream route token `callbackToken` for this instance",
+          generatedNone:
+            "This channel does not require an upstream callback URL in the first implementation stage.",
           readonly: "Your current role can view payment channel instances but cannot create or update them.",
           instanceName: "Instance Name",
           required: "Required",
@@ -154,6 +157,7 @@ export default async function MerchantChannelsPage({
           defaultBadge: "Default Instance",
           callbackUrl: "Upstream Payment Callback URL",
           callbackToken: "Upstream Route Token",
+          callbackNotRequired: "Not required for this channel",
           createdAt: "Created At",
           updatedAt: "Updated At",
           verifiedAt: "Last Verified",
@@ -191,6 +195,7 @@ export default async function MerchantChannelsPage({
           generatedTitle: "创建后系统会自动生成：",
           generatedFirst: "1. 当前商户当前通道实例的上游支付回调地址",
           generatedSecond: "2. 当前实例唯一的上游路由标识 `callbackToken`",
+          generatedNone: "当前阶段该通道不需要上游回调地址，系统仍会保留实例路由标识以便后续扩展。",
           readonly: "当前角色只能查看支付通道实例，不能新增或更新。",
           instanceName: "实例名称",
           required: "必填",
@@ -210,6 +215,7 @@ export default async function MerchantChannelsPage({
           defaultBadge: "默认实例",
           callbackUrl: "上游支付回调地址",
           callbackToken: "上游路由标识",
+          callbackNotRequired: "当前通道无需该项",
           createdAt: "创建于",
           updatedAt: "更新于",
           verifiedAt: "最近校验",
@@ -320,11 +326,17 @@ export default async function MerchantChannelsPage({
           </div>
           <p className="mt-3 text-sm leading-7 text-muted">{selectedTemplate.description}</p>
           <div className="mt-4 rounded-[1.25rem] border border-dashed border-line bg-white/65 p-4 text-sm leading-7 text-muted">
-            {content.generatedTitle}
-            <br />
-            {content.generatedFirst}
-            <br />
-            {content.generatedSecond}
+            {selectedTemplate.supportsCallbackRoute ? (
+              <>
+                {content.generatedTitle}
+                <br />
+                {content.generatedFirst}
+                <br />
+                {content.generatedSecond}
+              </>
+            ) : (
+              content.generatedNone
+            )}
           </div>
 
           {selectedTemplateBlockedByProfile ? (
@@ -438,16 +450,37 @@ export default async function MerchantChannelsPage({
             <div className="mt-6 grid gap-6 xl:grid-cols-2">
               {selectedAccounts.map((account) => {
                 const maskedConfig = maskMerchantChannelConfig(account.config) as Record<string, string>;
-                const callbackUrl = buildMerchantChannelCallbackUrl(
-                  account.channelCode,
-                  account.id,
-                  account.callbackToken,
-                );
+                const hasCallbackRoute = supportsMerchantChannelCallbackRoute(account.channelCode);
+                const callbackUrl = hasCallbackRoute
+                  ? buildMerchantChannelCallbackUrl(account.channelCode, account.id, account.callbackToken)
+                  : null;
                 const isDefault = Boolean(
                   selectedDefaultBinding?.enabled &&
                     selectedDefaultBinding.merchantChannelAccountId === account.id &&
                     account.enabled,
                 );
+                const callbackCopyItems: CopyFieldItem[] = hasCallbackRoute
+                  ? [
+                      {
+                        id: `${account.id}-callback-url`,
+                        label: content.callbackUrl,
+                        value: callbackUrl ?? "",
+                        wide: true,
+                      },
+                      {
+                        id: `${account.id}-callback-token`,
+                        label: content.callbackToken,
+                        value: account.callbackToken,
+                      },
+                    ]
+                  : [
+                      {
+                        id: `${account.id}-callback-status`,
+                        label: content.callbackUrl,
+                        value: content.callbackNotRequired,
+                        wide: true,
+                      },
+                    ];
                 const copyItems: CopyFieldItem[] = [
                   {
                     id: `${account.id}-instance-id`,
@@ -459,17 +492,7 @@ export default async function MerchantChannelsPage({
                     label: content.channelCodeLabel,
                     value: account.channelCode,
                   },
-                  {
-                    id: `${account.id}-callback-url`,
-                    label: content.callbackUrl,
-                    value: callbackUrl,
-                    wide: true,
-                  },
-                  {
-                    id: `${account.id}-callback-token`,
-                    label: content.callbackToken,
-                    value: account.callbackToken,
-                  },
+                  ...callbackCopyItems,
                   ...selectedTemplate.fields.flatMap((field) => {
                     const maskedValue = maskedConfig[field.key]?.trim();
 

@@ -15,6 +15,7 @@ import {
   toShanghaiDayKey,
 } from "@/lib/finance/calculations";
 import { backfillMerchantLedgerEntries } from "@/lib/finance/ledger";
+import { closeExpiredPaymentOrders } from "@/lib/orders/service";
 import { getPrismaClient } from "@/lib/prisma";
 import { getSystemConfig } from "@/lib/system-config";
 
@@ -272,6 +273,7 @@ async function syncMerchantBalanceSnapshots() {
 }
 
 export async function runFinanceMaintenance(input?: { holdDays?: number }) {
+  const expiredOrders = await closeExpiredPaymentOrders();
   const ledger = await backfillMerchantLedgerEntries();
   const settlements = await syncMerchantSettlements({
     holdDays: input?.holdDays,
@@ -279,6 +281,7 @@ export async function runFinanceMaintenance(input?: { holdDays?: number }) {
   const balanceSnapshots = await syncMerchantBalanceSnapshots();
 
   return {
+    expiredOrders,
     ledger,
     settlements,
     balanceSnapshots,
