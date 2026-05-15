@@ -18,6 +18,17 @@ import {
   runFinanceMaintenance,
 } from "@/lib/finance/settlements";
 import { generateMerchantApiCredential } from "@/lib/merchant-credentials";
+import {
+  getMarketplacePluginUsageBySlug,
+  getMarketplacePluginSafetyState,
+  installRemoteMarketplacePluginPackage,
+  purchaseAndIssueLicense,
+  recordMarketplacePluginPurchase,
+  setMarketplacePluginEnabledState,
+  setMarketplacePluginInstalledState,
+  syncBuiltinMarketplacePlugins,
+} from "@/lib/plugins/marketplace";
+import { fetchRemoteRegistrySnapshot } from "@/lib/plugins/remote-registry";
 import { hashPassword } from "@/lib/password";
 import { getPrismaClient } from "@/lib/prisma";
 import { migrateStoredSecret, sealStoredSecret } from "@/lib/secret-box";
@@ -31,6 +42,14 @@ function getString(formData: FormData, key: string) {
 function getOptionalString(formData: FormData, key: string) {
   const value = getString(formData, key);
   return value || null;
+}
+
+function getStringList(formData: FormData, key: string) {
+  return formData
+    .getAll(key)
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 function getRequiredString(formData: FormData, key: string, label: string) {
@@ -205,7 +224,10 @@ function getAuditActor(session: Awaited<ReturnType<typeof requireAdminSession>>)
 }
 
 function revalidateAdminPaths() {
+  revalidatePath("/");
   revalidatePath("/admin");
+  revalidatePath("/admin/plugins");
+  revalidatePath("/admin/plugins/sources");
   revalidatePath("/admin/finance");
   revalidatePath("/admin/merchants");
   revalidatePath("/admin/merchants/[id]", "page");
@@ -215,10 +237,85 @@ function revalidateAdminPaths() {
   revalidatePath("/admin/callbacks");
   revalidatePath("/admin/audit-logs");
   revalidatePath("/admin/users");
+  revalidatePath("/docs");
   revalidatePath("/merchant");
   revalidatePath("/merchant/channels");
+  revalidatePath("/merchant/integration");
   revalidatePath("/merchant/orders");
   revalidatePath("/merchant/refunds");
+}
+
+function resolveRegistryAppKeyForStorage(input: {
+  submittedValue: string;
+  currentValue?: string | null;
+  preserveBlank?: boolean;
+}) {
+  if (!input.submittedValue) {
+    return input.preserveBlank ? migrateStoredSecret(input.currentValue) : null;
+  }
+
+  return sealStoredSecret(input.submittedValue);
+}
+
+async function assertMarketplacePluginCanBeDisabled(slug: string) {
+  const usage = await getMarketplacePluginUsageBySlug(slug);
+
+  if (usage.enabledMerchantAccountCount > 0 || usage.enabledBindingCount > 0) {
+    throw new Error(
+      `当前插件仍有 ${usage.enabledMerchantAccountCount} 个启用中的商户通道实例、${usage.enabledBindingCount} 个启用中的路由绑定，不能直接停用。请先停用相关商户配置。`,
+    );
+  }
+}
+
+async function assertMarketplacePluginCanBeUninstalled(slug: string) {
+  const usage = await getMarketplacePluginUsageBySlug(slug);
+
+  if (usage.merchantAccountCount > 0 || usage.bindingCount > 0) {
+    throw new Error(
+      `当前插件仍关联 ${usage.merchantAccountCount} 个商户通道实例、${usage.bindingCount} 个路由绑定，不能直接卸载。请先清理商户配置后再卸载。`,
+    );
+  }
+}
+
+async function installMarketplacePlugin(slug: string) {
+  const state = await getMarketplacePluginSafetyState(slug);
+
+  if (!state) {
+    throw new Error("插件不存在。");
+  }
+
+  if (state.source === "REMOTE_SIGNED") {
+    const result = await installRemoteMarketplacePluginPackage(slug);
+    return getPrismaClient().marketplacePlugin.findUniqueOrThrow({
+      where: {
+        slug: result.plugin.slug,
+      },
+    });
+  }
+
+  return setMarketplacePluginInstalledState({
+    slug,
+    installed: true,
+  });
+}
+
+async function uninstallMarketplacePlugin(slug: string) {
+  await assertMarketplacePluginCanBeUninstalled(slug);
+  return setMarketplacePluginInstalledState({
+    slug,
+    installed: false,
+  });
+}
+
+async function setMarketplacePluginEnabled(slug: string, enabled: boolean) {
+  if (!enabled) {
+    await assertMarketplacePluginCanBeDisabled(slug);
+  }
+
+  return setMarketplacePluginEnabledState({
+    slug,
+    enabled,
+  });
 }
 
 export async function loginAdminAction(formData: FormData) {
@@ -1125,4 +1222,526 @@ export async function updateMerchantApiCredentialStatusAction(formData: FormData
   }
 
   redirect(withMessage(redirectTo, "success", "商户 API 凭证已更新。"));
+}
+
+export async function syncMarketplacePluginsAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins");
+
+  try {
+    await syncBuiltinMarketplacePlugins(true);
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "marketplace_plugin.sync",
+      resourceType: "marketplace_plugin",
+      summary: "同步受控内置插件市场目录。",
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "插件市场目录已同步。"));
+}
+
+export async function createPluginRegistrySourceAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins/sources");
+
+  try {
+    const name = getRequiredString(formData, "name", "商店源名称");
+    const baseUrl = getRequiredString(formData, "baseUrl", "商店源地址");
+
+    if (!isHttpUrl(baseUrl)) {
+      throw new Error("商店源地址必须是合法的 http/https URL。");
+    }
+
+    const source = await getPrismaClient().pluginRegistrySource.create({
+      data: {
+        name,
+        baseUrl,
+        appId: getOptionalString(formData, "appId"),
+        appKeyCiphertext: resolveRegistryAppKeyForStorage({
+          submittedValue: getString(formData, "appKey"),
+        }),
+        enabled: getBoolean(formData, "enabled"),
+      },
+    });
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "plugin_registry_source.create",
+      resourceType: "plugin_registry_source",
+      resourceId: source.id,
+      summary: `创建插件商店源 ${source.name}。`,
+      metadata: {
+        baseUrl: source.baseUrl,
+        enabled: source.enabled,
+        hasAppId: Boolean(source.appId),
+        hasAppKey: Boolean(source.appKeyCiphertext),
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "插件商店源已创建。"));
+}
+
+export async function updatePluginRegistrySourceAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins/sources");
+
+  try {
+    const id = getRequiredString(formData, "id", "商店源 ID");
+    const existing = await getPrismaClient().pluginRegistrySource.findUnique({
+      where: {
+        id,
+      },
+      select: {
+        id: true,
+        name: true,
+        appKeyCiphertext: true,
+      },
+    });
+
+    if (!existing) {
+      throw new Error("插件商店源不存在。");
+    }
+
+    const name = getRequiredString(formData, "name", "商店源名称");
+    const baseUrl = getRequiredString(formData, "baseUrl", "商店源地址");
+
+    if (!isHttpUrl(baseUrl)) {
+      throw new Error("商店源地址必须是合法的 http/https URL。");
+    }
+
+    const source = await getPrismaClient().pluginRegistrySource.update({
+      where: {
+        id,
+      },
+      data: {
+        name,
+        baseUrl,
+        appId: getOptionalString(formData, "appId"),
+        appKeyCiphertext: resolveRegistryAppKeyForStorage({
+          submittedValue: getString(formData, "appKey"),
+          currentValue: existing.appKeyCiphertext,
+          preserveBlank: getString(formData, "appKeyStrategy") === "preserve_if_blank",
+        }),
+        enabled: getBoolean(formData, "enabled"),
+      },
+    });
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "plugin_registry_source.update",
+      resourceType: "plugin_registry_source",
+      resourceId: source.id,
+      summary: `更新插件商店源 ${source.name}。`,
+      metadata: {
+        baseUrl: source.baseUrl,
+        enabled: source.enabled,
+        hasAppId: Boolean(source.appId),
+        hasAppKey: Boolean(source.appKeyCiphertext),
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "插件商店源已更新。"));
+}
+
+export async function syncPluginRegistrySourceAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins/sources");
+
+  try {
+    const sourceId = getRequiredString(formData, "id", "商店源 ID");
+    const snapshot = await fetchRemoteRegistrySnapshot(sourceId);
+
+    if (!snapshot) {
+      throw new Error("插件商店源不存在或当前处于停用状态。");
+    }
+
+    await syncBuiltinMarketplacePlugins(true);
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "plugin_registry_source.sync",
+      resourceType: "plugin_registry_source",
+      resourceId: sourceId,
+      summary: `同步插件商店源 ${snapshot.sourceName}。`,
+      metadata: {
+        baseUrl: snapshot.sourceBaseUrl,
+        pluginCount: snapshot.plugins.length,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "插件商店源目录已同步。"));
+}
+
+export async function markMarketplacePluginPurchasedAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins");
+
+  try {
+    const slug = getRequiredString(formData, "slug", "插件标识");
+    const { plugin, record } = await recordMarketplacePluginPurchase({
+      slug,
+      purchasedBy: getAuditActor(session),
+      orderReference: getOptionalString(formData, "orderReference"),
+      licenseKey: getOptionalString(formData, "licenseKey"),
+      notes: getOptionalString(formData, "notes"),
+    });
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "marketplace_plugin.mark_purchased",
+      resourceType: "marketplace_plugin",
+      resourceId: plugin.id,
+      summary: `记录收费插件 ${plugin.slug} 已购买。`,
+      metadata: {
+        slug: plugin.slug,
+        purchasedAt: plugin.purchasedAt?.toISOString() ?? null,
+        orderReference: record.orderReference,
+        licenseKey: record.licenseKey,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "收费插件已记录为已购状态。"));
+}
+
+/**
+ * Phase 3 license-based purchase action. Calls the Registry's order endpoint
+ * to create an order + receive a license, then verifies and persists it via
+ * `purchaseAndIssueLicense`. Falls back to the legacy manual-mark flow if the
+ * Registry is unreachable or the plugin has no registrySourceId.
+ */
+export async function purchaseMarketplacePluginAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins");
+
+  try {
+    const slug = getRequiredString(formData, "slug", "插件标识");
+    const prisma = getPrismaClient();
+
+    // Look up the plugin and its registry source
+    const plugin = await prisma.marketplacePlugin.findUnique({
+      where: { slug },
+      select: {
+        id: true,
+        slug: true,
+        source: true,
+        version: true,
+        pricingMode: true,
+        registrySourceId: true,
+      },
+    });
+
+    if (!plugin || plugin.source !== "REMOTE_SIGNED" || plugin.pricingMode !== "PAID") {
+      throw new Error("当前插件不是远程收费插件，无法发起购买。");
+    }
+
+    if (!plugin.registrySourceId) {
+      throw new Error("当前插件未关联远程商店源，无法发起购买。");
+    }
+
+    const source = await prisma.pluginRegistrySource.findUnique({
+      where: { id: plugin.registrySourceId },
+    });
+
+    if (!source) {
+      throw new Error("远程商店源不存在。");
+    }
+
+    const { revealStoredSecret } = await import("@/lib/secret-box");
+    const { ensureInstanceId } = await import("@/lib/system-config");
+    const instanceId = await ensureInstanceId();
+    const appKey = revealStoredSecret(source.appKeyCiphertext) ?? "";
+
+    // Call Registry to create an order (auto-pay in dev mode)
+    const orderUrl = new URL(
+      `/api/registry/plugins/${slug}/orders`,
+      source.baseUrl,
+    ).toString();
+
+    const orderRes = await fetch(orderUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-novapay-registry-app-id": source.appId ?? "",
+        "x-novapay-registry-app-key": appKey,
+      },
+      body: JSON.stringify({ instanceId }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!orderRes.ok) {
+      const errorBody = await orderRes.text();
+      throw new Error(`Registry 订单创建失败 (HTTP ${orderRes.status}): ${errorBody}`);
+    }
+
+    const orderData = (await orderRes.json()) as {
+      orderId: string;
+      state: string;
+      license?: { licenseKey: string } | null;
+      checkoutUrl?: string | null;
+    };
+
+    // If the order is already PAID (auto-pay dev mode), verify the license
+    if (orderData.state === "PAID" && orderData.license?.licenseKey) {
+      const result = await purchaseAndIssueLicense({
+        slug,
+        licenseKey: orderData.license.licenseKey,
+        version: plugin.version,
+        instanceId,
+        purchasedBy: getAuditActor(session),
+        orderReference: orderData.orderId,
+      });
+
+      if (!result.success) {
+        throw new Error(
+          `许可证验证失败: ${result.reason} — ${result.message}`,
+        );
+      }
+
+      await writeAdminAuditLog({
+        actor: getAuditActor(session),
+        action: "marketplace_plugin.purchase_license",
+        resourceType: "marketplace_plugin",
+        resourceId: plugin.id,
+        summary: `通过 Registry 购买插件 ${plugin.slug} 并获得许可证。`,
+        metadata: {
+          slug: plugin.slug,
+          orderId: orderData.orderId,
+          instanceId,
+        },
+      });
+      revalidateAdminPaths();
+      redirect(
+        withMessage(redirectTo, "success", "收费插件已购买并获得许可证验证。"),
+      );
+    }
+
+    // If the order is PENDING (production mode), redirect to checkout
+    if (orderData.checkoutUrl) {
+      redirect(orderData.checkoutUrl);
+    }
+
+    throw new Error("Registry 返回了未知的订单状态，请稍后重试。");
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(redirectTo);
+}
+
+export async function installMarketplacePluginAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins");
+  let installedEnabled = false;
+
+  try {
+    const slug = getRequiredString(formData, "slug", "插件标识");
+    const plugin = await installMarketplacePlugin(slug);
+    installedEnabled = plugin.enabled;
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "marketplace_plugin.install",
+      resourceType: "marketplace_plugin",
+      resourceId: plugin.id,
+      summary: `安装插件 ${plugin.slug}。`,
+      metadata: {
+        slug: plugin.slug,
+        installed: plugin.installed,
+        enabled: plugin.enabled,
+        version: plugin.version,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(
+    withMessage(
+      redirectTo,
+      "success",
+      installedEnabled ? "插件已安装并启用。" : "插件已导入市场目录，当前仍处于未启用状态。",
+    ),
+  );
+}
+
+export async function uninstallMarketplacePluginAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins");
+
+  try {
+    const slug = getRequiredString(formData, "slug", "插件标识");
+    const plugin = await uninstallMarketplacePlugin(slug);
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "marketplace_plugin.uninstall",
+      resourceType: "marketplace_plugin",
+      resourceId: plugin.id,
+      summary: `卸载插件 ${plugin.slug}。`,
+      metadata: {
+        slug: plugin.slug,
+        installed: plugin.installed,
+        enabled: plugin.enabled,
+        version: plugin.version,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "插件已从受控市场停用。"));
+}
+
+export async function toggleMarketplacePluginEnabledAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins");
+
+  try {
+    const slug = getRequiredString(formData, "slug", "插件标识");
+    const enabled = getBoolean(formData, "enabled");
+    const plugin = await setMarketplacePluginEnabled(slug, enabled);
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "marketplace_plugin.toggle",
+      resourceType: "marketplace_plugin",
+      resourceId: plugin.id,
+      summary: `${enabled ? "启用" : "停用"}插件 ${plugin.slug}。`,
+      metadata: {
+        slug: plugin.slug,
+        installed: plugin.installed,
+        enabled: plugin.enabled,
+        version: plugin.version,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(
+    withMessage(
+      redirectTo,
+      "success",
+      getBoolean(formData, "enabled") ? "插件已启用。" : "插件已停用。",
+    ),
+  );
+}
+
+export async function refreshMarketplacePluginRuntimeAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins");
+
+  try {
+    const slug = getRequiredString(formData, "slug", "插件标识");
+    await syncBuiltinMarketplacePlugins(true);
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "marketplace_plugin.runtime_refresh",
+      resourceType: "marketplace_plugin",
+      summary: `重新检测插件 ${slug} 的本地运行时状态。`,
+      metadata: {
+        slug,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "插件运行时状态已重新检测。"));
+}
+
+export async function batchMarketplacePluginAction(formData: FormData) {
+  const session = await requireAdminPermission("plugin_marketplace:write");
+  const redirectTo = getRedirectTo(formData, "/admin/plugins");
+
+  try {
+    const action = getRequiredString(formData, "batchAction", "批量操作");
+    const slugs = getStringList(formData, "selectedSlugs");
+
+    if (slugs.length === 0) {
+      throw new Error("请先选择至少一个插件。");
+    }
+
+    const uniqueSlugs = [...new Set(slugs)];
+    let changed = 0;
+
+    for (const slug of uniqueSlugs) {
+      let plugin;
+
+      if (action === "install") {
+        plugin = await installMarketplacePlugin(slug);
+      } else if (action === "enable") {
+        plugin = await setMarketplacePluginEnabled(slug, true);
+      } else if (action === "disable") {
+        plugin = await setMarketplacePluginEnabled(slug, false);
+      } else if (action === "uninstall") {
+        plugin = await uninstallMarketplacePlugin(slug);
+      } else {
+        throw new Error("不支持的批量操作。");
+      }
+
+      changed += 1;
+
+      await writeAdminAuditLog({
+        actor: getAuditActor(session),
+        action: `marketplace_plugin.batch.${action}`,
+        resourceType: "marketplace_plugin",
+        resourceId: plugin.id,
+        summary: `批量${action === "install" ? "安装" : action === "enable" ? "启用" : action === "disable" ? "停用" : "卸载"}插件 ${plugin.slug}。`,
+        metadata: {
+          slug: plugin.slug,
+          installed: plugin.installed,
+          enabled: plugin.enabled,
+          version: plugin.version,
+          batchSize: uniqueSlugs.length,
+        },
+      });
+    }
+
+    revalidateAdminPaths();
+
+    const actionLabel =
+      action === "install"
+        ? "安装"
+        : action === "enable"
+          ? "启用"
+          : action === "disable"
+            ? "停用"
+            : "卸载";
+
+    redirect(
+      withMessage(
+        redirectTo,
+        "success",
+        `已批量${actionLabel} ${changed} 个插件。`,
+      ),
+    );
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
 }
