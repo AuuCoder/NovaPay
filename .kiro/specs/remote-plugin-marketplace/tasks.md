@@ -135,33 +135,33 @@
 
 ### Registry 端
 
-- [ ] 4.1 实现静态扫描 worker `apps/registry/workers/static-scan/worker.ts` + 入队 `apps/registry/workers/static-scan/enqueue.ts`：上传成功后异步入队，扫描 `.js / .mjs / .cjs / .ts` 文件 AST
+- [x] 4.1 实现静态扫描 worker `apps/registry/workers/static-scan/worker.ts` + 入队 `apps/registry/workers/static-scan/enqueue.ts`：上传成功后异步入队，扫描 `.js / .mjs / .cjs / .ts` 文件 AST
   _Requirements: 20.1_
-- [ ] 4.2 实现扫描规则 `apps/registry/lib/static-scan/rules.ts` 与 AST 引擎 `apps/registry/lib/static-scan/ast-scan.ts`：banned API 集合（`child_process.exec/spawn`、`eval`、`new Function` 强制人工复核；`fs.writeFile`、`worker_threads` 警告）+ capability ↔ 代码一致性（声明 `notify_callback` 但未导出 `callbacks`、声明 `refund` 但未实现 `createRefund`）
+- [x] 4.2 实现扫描规则 `apps/registry/lib/static-scan/rules.ts` 与 AST 引擎 `apps/registry/lib/static-scan/ast-scan.ts`：banned API 集合（`child_process.exec/spawn`、`eval`、`new Function` 强制人工复核；`fs.writeFile`、`worker_threads` 警告）+ capability ↔ 代码一致性（声明 `notify_callback` 但未导出 `callbacks`、声明 `refund` 但未实现 `createRefund`）
   _Requirements: 20.1, 20.2, 20.3_
-- [ ] 4.3 在 Admin 审核工作台中展示 findings，并在含 BLOCK 严重度时强制路径走 `IN_REVIEW` 人工复核
+- [x] 4.3 在 Admin 审核工作台中展示 findings，并在含 BLOCK 严重度时强制路径走 `IN_REVIEW` 人工复核
   _Requirements: 20.2, 20.3_
 
 ### NovaPay 主程序端
 
-- [ ] 4.4 新增 `lib/plugins/sandbox-runtime.ts` 与 worker 入口 `lib/plugins/sandbox-worker.ts`：基于 `worker_threads` 实现 `loadSandboxedRuntime`，注入 `hostBridge`（`http / log / time / random`），通过 `resourceLimits.maxOldGenerationSizeMb=128 / maxYoungGenerationSizeMb=16` 设置堆上限；worker 加载插件代码前删除 `globalThis.process / require / Buffer`，对 `child_process` / 嵌套 `worker_threads` / `fs.writeFile` 系列接口的 import 抛 `CAPABILITY_DENIED`
+- [x] 4.4 新增 `lib/plugins/sandbox-runtime.ts` 与 worker 入口 `lib/plugins/sandbox-worker.ts`：基于 `worker_threads` 实现 `loadSandboxedRuntime`，注入 `hostBridge`（`http / log / time / random`），通过 `resourceLimits.maxOldGenerationSizeMb=128 / maxYoungGenerationSizeMb=16` 设置堆上限；worker 加载插件代码前删除 `globalThis.process / require / Buffer`，对 `child_process` / 嵌套 `worker_threads` / `fs.writeFile` 系列接口的 import 抛 `CAPABILITY_DENIED`
   _Requirements: 16.2, 16.3, 16.5, 21.1, 21.2, 21.3, 21.4_
-- [ ] 4.5 实现 capability 白名单运行期校验：未在 manifest 声明的能力（如 `notify_callback`）调用对应 host bridge 时抛 `CAPABILITY_DENIED`；并在 sandbox 加载失败时把 `MarketplacePlugin.metadata.runnable=false`，admin UI 展示「未通过沙箱加载」提示
+- [x] 4.5 实现 capability 白名单运行期校验：未在 manifest 声明的能力（如 `notify_callback`）调用对应 host bridge 时抛 `CAPABILITY_DENIED`；并在 sandbox 加载失败时把 `MarketplacePlugin.metadata.runnable=false`，admin UI 展示「未通过沙箱加载」提示
   _Requirements: 16.2, 21.4, 21.5_
-- [ ] 4.6 实现单次 RPC 5 秒超时与 OOM 归一化：每次 host → worker postMessage 配 `setTimeout(5000)` + `worker.terminate()`，超时返回 `PLUGIN_RUNTIME_TIMEOUT`，OOM 错误归一化为 `PLUGIN_RUNTIME_OOM`
+- [x] 4.6 实现单次 RPC 5 秒超时与 OOM 归一化：每次 host → worker postMessage 配 `setTimeout(5000)` + `worker.terminate()`，超时返回 `PLUGIN_RUNTIME_TIMEOUT`，OOM 错误归一化为 `PLUGIN_RUNTIME_OOM`
   _Requirements: 16.3, 16.4, 16.5_
-- [ ] 4.7 改造 `lib/plugins/local-package-runtimes.ts`：当 `manifest.source === "REMOTE_SIGNED"` 时改走 `loadSandboxedRuntime`，其它来源沿用既有 `importLocalRuntimeModule`
+- [x] 4.7 改造 `lib/plugins/local-package-runtimes.ts`：当 `manifest.source === "REMOTE_SIGNED"` 时改走 `loadSandboxedRuntime`，其它来源沿用既有 `importLocalRuntimeModule`
   _Requirements: 21.1_
-- [ ] 4.8 在 sandbox 中向插件注入按 `merchantId` 过滤后的 `MerchantChannelAccount.config` + 当次请求载荷，禁止跨商户读取
+- [x] 4.8 在 sandbox 中向插件注入按 `merchantId` 过滤后的 `MerchantChannelAccount.config` + 当次请求载荷，禁止跨商户读取
   _Requirements: 16.1_
 
 ### 跨切面（审计 / 限流 / 测试）
 
-- [ ] 4.9 编写沙箱隔离集成测试（NovaPay 侧）：覆盖 banned API 抛 `CAPABILITY_DENIED`、5s 超时、128MB 堆 OOM、跨商户读取失败、未声明 capability 抛错五类用例
+- [x] 4.9 编写沙箱隔离集成测试（NovaPay 侧）：覆盖 banned API 抛 `CAPABILITY_DENIED`、5s 超时、128MB 堆 OOM、跨商户读取失败、未声明 capability 抛错五类用例
   _Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 21.2, 21.3_
-- [ ] 4.10 编写静态扫描单测：覆盖 `child_process.exec`、`eval`、`new Function`、capability 不匹配等命中路径以及合法代码不命中路径
+- [x] 4.10 编写静态扫描单测：覆盖 `child_process.exec`、`eval`、`new Function`、capability 不匹配等命中路径以及合法代码不命中路径
   _Requirements: 20.1, 20.2, 20.3_
-- [ ] 4.11 在 Registry `AuditLog` 中追加扫描 finding 与 admin 强制复核事件，在 NovaPay `AdminAuditLog` 中追加沙箱拒绝事件，并编写沙箱性能基准（1000 次 createPayment P95 作为后续 hardening 回归门槛）
+- [x] 4.11 在 Registry `AuditLog` 中追加扫描 finding 与 admin 强制复核事件，在 NovaPay `AdminAuditLog` 中追加沙箱拒绝事件，并编写沙箱性能基准（1000 次 createPayment P95 作为后续 hardening 回归门槛）
   _Requirements: 16.2, 20.2, 21.1, 21.3_
 
 ## Task Dependency Graph
