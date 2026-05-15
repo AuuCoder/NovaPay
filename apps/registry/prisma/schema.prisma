@@ -1,0 +1,193 @@
+generator client {
+  provider   = "prisma-client"
+  output     = "../generated/prisma"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =====================================================================
+// Phase 1 subset of the Registry schema. Phase 2/3/4 will introduce
+// DeveloperToken / Category / PluginCategoryLink / PluginPricingHistory /
+// Order / License / LicenseRevocation / PayoutAccount / PayoutRequest
+// (and their enums). Models below are intentionally kept self-consistent
+// without forward references to those phases.
+// =====================================================================
+
+enum DeveloperAccountStatus {
+  EMAIL_UNVERIFIED
+  ACTIVE
+  SUSPENDED
+}
+
+enum PluginPricingMode {
+  FREE
+  PAID
+}
+
+enum ReviewState {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  PUBLISHED
+  DEPRECATED
+  TAKEN_DOWN
+}
+
+enum SigningKeyStatus {
+  ACTIVE
+  RETIRED
+}
+
+model Developer {
+  id                String                 @id @default(cuid())
+  email             String                 @unique
+  passwordHash      String
+  displayName       String
+  contact           Json
+  status            DeveloperAccountStatus @default(EMAIL_UNVERIFIED)
+  balanceCents      Int                    @default(0)
+  novapayInstanceId String?
+  novapayMerchantId String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  plugins   PluginRecord[]
+  auditLogs AuditLog[]     @relation("AuditLogActorDeveloper")
+
+  @@index([status, createdAt])
+}
+
+model PluginRecord {
+  id               String            @id @default(cuid())
+  developerId      String
+  developer        Developer         @relation(fields: [developerId], references: [id], onDelete: Restrict)
+  slug             String            @unique
+  remotePluginId   String            @unique
+  kind             String
+  channelCode      String            @unique
+  providerKey      String
+  packageName      String
+  displayName      String
+  vendor           String
+  description      String            @db.Text
+  pricingMode      PluginPricingMode
+  priceLabel       String?
+  publishedVersion String?
+  latestVersion    String?
+  visible          Boolean           @default(true)
+  takenDown        Boolean           @default(false)
+  takenDownReason  String?
+  featured         Boolean           @default(false)
+  metadata         Json?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  versions        PluginVersion[]
+  reviewWorkflows ReviewWorkflow[]
+
+  @@index([developerId, createdAt])
+  @@index([visible, takenDown, featured])
+}
+
+model PluginVersion {
+  id           String       @id @default(cuid())
+  pluginId     String
+  plugin       PluginRecord @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  version      String
+  manifestJson Json
+  manifestRaw  String       @db.Text
+  reviewState  ReviewState  @default(DRAFT)
+  reviewerId   String?
+  reviewNote   String?      @db.Text
+  rejectReason String?      @db.Text
+  publishedAt  DateTime?
+  capabilities Json
+  assetId      String       @unique
+  asset        PluginAsset  @relation(fields: [assetId], references: [id])
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  reviewWorkflow ReviewWorkflow?
+
+  @@unique([pluginId, version])
+  @@index([reviewState, createdAt])
+}
+
+model PluginAsset {
+  id             String     @id @default(cuid())
+  sha256         String     @unique
+  sizeBytes      Int
+  contentType    String
+  storageKey     String
+  signature      String
+  signatureKeyId String
+  signingKey     SigningKey @relation(fields: [signatureKeyId], references: [keyId])
+  createdAt      DateTime   @default(now())
+
+  versions PluginVersion[]
+}
+
+model SigningKey {
+  keyId     String           @id
+  alg       String
+  publicKey String
+  kmsKeyArn String?
+  status    SigningKeyStatus @default(ACTIVE)
+  notBefore DateTime
+  notAfter  DateTime
+  createdAt DateTime         @default(now())
+
+  assets PluginAsset[]
+
+  @@index([status, notAfter])
+}
+
+model ReviewWorkflow {
+  id           String        @id @default(cuid())
+  pluginId     String
+  plugin       PluginRecord  @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  versionId    String        @unique
+  version      PluginVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  claimedById  String?
+  decision     String?
+  decisionNote String?       @db.Text
+  findings     Json
+  appealNote   String?       @db.Text
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([claimedById, updatedAt])
+}
+
+model AuditLog {
+  id             String     @id @default(cuid())
+  actorType      String
+  actorId        String
+  developerActor Developer? @relation("AuditLogActorDeveloper", fields: [actorId], references: [id], onDelete: SetNull, map: "audit_log_actor_developer_fkey")
+  action         String
+  targetKind     String?
+  targetId       String?
+  payload        Json?
+  ip             String?
+  createdAt      DateTime   @default(now())
+
+  @@index([actorType, actorId, createdAt])
+  @@index([targetKind, targetId, createdAt])
+}
+
+model RegistryConsumer {
+  id              String   @id @default(cuid())
+  instanceId      String   @unique
+  appId           String   @unique
+  appKeyHash      String
+  displayName     String
+  enabled         Boolean  @default(true)
+  rateLimitPerMin Int      @default(600)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}

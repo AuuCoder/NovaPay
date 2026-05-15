@@ -64,6 +64,28 @@ enum MerchantStatus {
   SUSPENDED
 }
 
+enum MarketplacePluginKind {
+  PAYMENT_CHANNEL
+}
+
+enum MarketplacePluginSource {
+  BUILTIN
+  LOCAL_PACKAGE
+  REMOTE_SIGNED
+}
+
+enum PluginPackageInstallStatus {
+  DOWNLOADED
+  VALIDATED
+  LOAD_ERROR
+  ROLLED_BACK
+}
+
+enum PluginPricingMode {
+  FREE
+  PAID
+}
+
 enum MerchantLedgerEntryType {
   PAYMENT_CAPTURE
   PAYMENT_FEE
@@ -121,6 +143,7 @@ model Merchant {
   requestNonces         MerchantRequestNonce[]
   channelBindings       MerchantChannelBinding[]
   channelAccounts       MerchantChannelAccount[]
+  installedPlugins      MerchantInstalledPlugin[]
   apiCredentials        MerchantApiCredential[]
   users                 MerchantUser[]
   idempotencyRecords    MerchantIdempotencyRecord[]
@@ -202,6 +225,128 @@ model SystemConfig {
   updatedAt DateTime @updatedAt
 
   @@index([group])
+}
+
+model MarketplacePlugin {
+  id          String                  @id @default(cuid())
+  slug        String                  @unique
+  kind        MarketplacePluginKind
+  source      MarketplacePluginSource
+  registrySourceId String?
+  registrySource PluginRegistrySource? @relation(fields: [registrySourceId], references: [id], onDelete: SetNull)
+  remotePluginId String?
+  channelCode String?                 @unique
+  providerKey String?
+  packageName String?
+  displayName String
+  vendor      String?
+  description String                  @db.Text
+  version     String
+  latestVersion String?
+  publishedVersion String?
+  runtimeMode String?
+  pricingMode PluginPricingMode?
+  priceLabel  String?
+  purchaseUrl String?
+  purchasedAt DateTime?
+  downloadUrl String?
+  checksum   String?
+  signature  String?
+  capabilities Json?
+  metadata    Json?
+  trusted     Boolean                 @default(true)
+  installed   Boolean                 @default(false)
+  enabled     Boolean                 @default(false)
+  installedAt DateTime?
+  lastSyncedAt DateTime?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+  merchantInstalls MerchantInstalledPlugin[]
+  packageInstalls PluginPackageInstall[]
+  purchaseRecords PluginPurchaseRecord[]
+
+  @@index([kind, installed, enabled])
+  @@index([source, installed])
+  @@index([registrySourceId, source])
+  @@index([remotePluginId])
+}
+
+model PluginRegistrySource {
+  id         String            @id @default(cuid())
+  name       String
+  baseUrl    String
+  appId      String?
+  appKeyCiphertext String?
+  enabled    Boolean           @default(true)
+  lastSyncAt DateTime?
+  trustPublicKey          String?
+  trustPublicKeyKeyId     String?
+  trustPublicKeyExpiresAt DateTime?
+  licensePublicKey        String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  plugins    MarketplacePlugin[]
+  packageInstalls PluginPackageInstall[]
+  purchaseRecords PluginPurchaseRecord[]
+
+  @@index([enabled, updatedAt])
+}
+
+model PluginPackageInstall {
+  id         String                   @id @default(cuid())
+  pluginSlug String
+  plugin     MarketplacePlugin        @relation(fields: [pluginSlug], references: [slug], onDelete: Cascade)
+  sourceId   String?
+  source     PluginRegistrySource?    @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  version    String
+  downloadUrl String?
+  installPath String
+  checksum   String?
+  signature  String?
+  status     PluginPackageInstallStatus @default(DOWNLOADED)
+  loadError  String?                  @db.Text
+  installedBy String?
+  installedAt DateTime                @default(now())
+  updatedAt  DateTime                 @updatedAt
+
+  @@index([pluginSlug, installedAt])
+  @@index([sourceId, installedAt])
+  @@index([status, installedAt])
+}
+
+model PluginPurchaseRecord {
+  id         String            @id @default(cuid())
+  pluginSlug String
+  plugin     MarketplacePlugin @relation(fields: [pluginSlug], references: [slug], onDelete: Cascade)
+  sourceId   String?
+  source     PluginRegistrySource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  orderReference String?
+  licenseKey String?
+  priceLabel String?
+  purchaseUrl String?
+  notes      String?           @db.Text
+  purchasedBy String?
+  purchasedAt DateTime         @default(now())
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@index([pluginSlug, purchasedAt])
+  @@index([sourceId, purchasedAt])
+}
+
+model MerchantInstalledPlugin {
+  id         String            @id @default(cuid())
+  merchantId String
+  merchant   Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  pluginSlug String
+  plugin     MarketplacePlugin @relation(fields: [pluginSlug], references: [slug], onDelete: Cascade)
+  installedAt DateTime         @default(now())
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@unique([merchantId, pluginSlug])
+  @@index([merchantId, installedAt])
+  @@index([pluginSlug])
 }
 
 model AdminAuditLog {
