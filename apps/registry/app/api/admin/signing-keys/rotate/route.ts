@@ -1,35 +1,19 @@
 /**
- * POST /admin/signing-keys/rotate
+ * POST /admin/signing-keys/rotate (Req 19.2, 19.3)
  *
- * Rotates the active Ed25519 signing key (Req 19.2, 19.3). Generates a fresh
- * key pair, demotes the current ACTIVE key to RETIRED with notAfter ≥ now+30d,
- * and bumps the trust.json cache version so consumers refetch immediately.
- *
- * Phase 3 stub: the route validates input and exercises the rotation
- * function with an in-memory store. The persistent SigningKey store wiring
- * lands when the Registry Postgres instance is provisioned.
+ * Rotates the active Ed25519 signing key in the runtime state, demoting the
+ * current ACTIVE key to RETIRED with notAfter ≥ now + 30d, and bumps the
+ * trust.json cache version so consumers refetch immediately.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import {
-  createInMemorySigningKeyStore,
-  type SigningKeyStore,
-} from "../../../../../lib/signing/key-store";
+import { getRegistryRuntime } from "../../../../../lib/runtime/state";
 import {
   createLocalKeyPairAdapter,
   rotateSigningKey,
 } from "../../../../../lib/signing/rotation";
 
 export const runtime = "nodejs";
-
-let placeholderStore: SigningKeyStore | null = null;
-function getSigningKeyStore() {
-  // Phase 3 placeholder — production wiring will return a Prisma-backed store.
-  if (!placeholderStore) {
-    placeholderStore = createInMemorySigningKeyStore();
-  }
-  return placeholderStore;
-}
 
 interface RotateRequestBody {
   keyId?: string;
@@ -52,7 +36,7 @@ export async function POST(request: NextRequest) {
   }
 
   const keyId = body.keyId?.trim() || generateDefaultKeyId();
-  const store = getSigningKeyStore();
+  const state = await getRegistryRuntime();
   const adapter = createLocalKeyPairAdapter();
 
   try {
@@ -61,7 +45,7 @@ export async function POST(request: NextRequest) {
         keyId,
         minRetiredGraceMs: body.minRetiredGraceMs,
       },
-      store,
+      state.keyStore,
       adapter,
     );
 

@@ -1,22 +1,15 @@
 /**
  * POST /licenses/verify
  *
- * Verifies a compact Ed25519 JWS license against the configured signing key
- * and revocation list. Returns structured `valid` + `reason` per Req 18.
- *
- * Phase 3 placeholder: uses in-memory key store. Production wiring will
- * resolve the SigningKeyStore from Prisma.
+ * Verifies a compact Ed25519 JWS license against the runtime signing key
+ * store and revocation list. Returns structured `valid` + `reason` per Req 18.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { createInMemorySigningKeyStore } from "../../../../lib/signing/key-store";
-import { createInMemoryRevocationStore } from "../../../../lib/licensing/revocation";
+import { getRegistryRuntime } from "../../../../lib/runtime/state";
 import { verifyLicense } from "../../../../lib/licensing/verifier";
 
 export const runtime = "nodejs";
-
-const keyStore = createInMemorySigningKeyStore();
-const revocationStore = createInMemoryRevocationStore();
 
 export async function POST(request: NextRequest) {
   let body: Record<string, unknown> = {};
@@ -37,6 +30,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const state = await getRegistryRuntime();
+
   const result = await verifyLicense(
     {
       jwsCompact,
@@ -53,12 +48,12 @@ export async function POST(request: NextRequest) {
           ? body.expectedMerchantId
           : undefined,
     },
-    keyStore,
-    revocationStore,
+    state.keyStore,
+    state.revocations,
   );
 
   return NextResponse.json(result, {
-    status: result.valid ? 200 : 200,
+    status: 200,
     headers: { "Cache-Control": "no-store" },
   });
 }

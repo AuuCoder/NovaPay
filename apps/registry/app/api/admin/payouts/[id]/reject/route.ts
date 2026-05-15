@@ -1,15 +1,11 @@
 /**
  * POST /admin/payouts/:id/reject (Req 4.5)
- *
- * Admin rejects a pending payout request. Releases the frozen balance.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { createInMemoryBalanceLedger } from "../../../../../../lib/payouts/balance-ledger";
+import { getRegistryRuntime } from "../../../../../../lib/runtime/state";
 
 export const runtime = "nodejs";
-
-const ledger = createInMemoryBalanceLedger();
 
 export async function POST(
   request: NextRequest,
@@ -29,9 +25,8 @@ export async function POST(
       { status: 400 },
     );
   }
-
-  const result = await ledger.rejectPayout({ requestId: id, adminNote });
-
+  const state = await getRegistryRuntime();
+  const result = await state.ledger.rejectPayout({ requestId: id, adminNote });
   if (!result.success) {
     const status = result.errorCode === "NOT_FOUND" ? 404 : 409;
     return NextResponse.json(
@@ -39,6 +34,5 @@ export async function POST(
       { status },
     );
   }
-
   return NextResponse.json({ success: true, request: result.request });
 }

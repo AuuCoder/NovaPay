@@ -1,34 +1,53 @@
 /**
  * GET /registry/packages/:slug/:version
  *
- * Returns a signed download URL (5-minute expiry, Req 17.4) plus the bundle
- * checksum and signature for the requested plugin version.
- *
- * Phase 1: returns placeholder data. Once the object store and signing
- * service are wired to the database, this will generate real presigned URLs.
+ * Returns checksum + Ed25519 signature plus a short-lived download URL
+ * pointing to `/api/registry/packages/:slug/:version/download` where the
+ * actual bundle bytes are served. The download link expires in 5 minutes
+ * (Req 17.4); for the in-memory dev store this is encoded in the URL.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
+import {
+  describeDemoBundle,
+  getRegistryRuntime,
+} from "../../../../../../lib/runtime/state";
+import { requireConsumer } from "../../../../../../lib/auth/require-consumer";
 
 export const runtime = "nodejs";
 
+const DOWNLOAD_EXPIRY_SECONDS = 5 * 60;
+
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ slug: string; version: string }> },
 ) {
-  const { slug, version } = await params;
+  const auth = await requireConsumer(request);
+  if (auth.response) return auth.response;
 
-  // Phase 1 placeholder: in production this queries PluginVersion + PluginAsset
-  // and generates a presigned download URL from the object store.
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  const { slug, version } = await params;
+  const state = await getRegistryRuntime();
+  const bundle = describeDemoBundle(state, slug, version);
+  if (!bundle) {
+    return NextResponse.json(
+      { error: "BUNDLE_NOT_FOUND", message: `No bundle for ${slug}@${version}` },
+      { status: 404 },
+    );
+  }
+
+  const url = new URL(request.url);
+  const expiresAt = new Date(Date.now() + DOWNLOAD_EXPIRY_SECONDS * 1000);
+  const downloadUrl = `${url.origin}/api/registry/packages/${slug}/${version}/download?expires=${Math.floor(expiresAt.getTime() / 1000)}`;
 
   return NextResponse.json({
     slug,
     version,
-    downloadUrl: `http://localhost:3000/api/registry/packages/${slug}/${version}/download?expires=${Math.floor(expiresAt.getTime() / 1000)}`,
+    sha256: bundle.sha256,
+    sizeBytes: bundle.sizeBytes,
+    checksum: `sha256:${bundle.sha256}`,
+    signature: bundle.signature,
+    signatureKeyId: bundle.signatureKeyId,
+    downloadUrl,
     downloadUrlExpiresAt: expiresAt.toISOString(),
-    checksum: null,
-    signature: null,
-    signatureKeyId: null,
   });
 }

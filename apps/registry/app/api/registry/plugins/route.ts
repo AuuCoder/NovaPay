@@ -6,56 +6,34 @@
  * New fields are placed exclusively under `metadata.*` to preserve backward
  * compatibility with `parseRemotePluginRecord` (Req 23.1, 25.2).
  *
- * Phase 1: returns a hardcoded demo catalog. Once the Prisma-backed
- * PluginRecord store is wired, this will query the database.
+ * The catalog is sourced from `lib/runtime/state.ts`, which signs the demo
+ * bundles at boot so the checksum/signature returned here are real and
+ * verifiable by consumers using `/.well-known/trust.json`.
  */
 
 import { NextResponse } from "next/server";
+import { getRegistryRuntime } from "../../../../lib/runtime/state";
+import { requireConsumer } from "../../../../lib/auth/require-consumer";
 
 export const runtime = "nodejs";
 
-// Phase 1 placeholder catalog — mirrors the mock registry shape exactly.
-// Will be replaced by a database query in a follow-up task.
-function getPluginCatalog() {
-  return [
-    {
-      remotePluginId: "remote.demo.crypto",
-      slug: "remote.demo-runnable-crypto",
-      kind: "PAYMENT_CHANNEL",
-      channelCode: "crypto.remote-runnable",
-      providerKey: "crypto",
-      packageName: "@novapay/remote-demo-runnable",
-      displayName: "Remote Demo Runnable Plugin",
-      vendor: "NovaPay Remote Demo",
-      description:
-        "A remote registry plugin used to validate registry sync and package install.",
-      version: "0.1.0",
-      latestVersion: "0.1.0",
-      runtimeMode: "RUNNABLE",
-      pricingMode: "FREE",
-      priceLabel: "Free",
-      purchaseUrl: null,
-      downloadUrl: "/api/registry/packages/remote.demo-runnable-crypto/0.1.0",
-      checksum: null,
-      signature: null,
-      capabilities: ["native_qr", "return_url", "order_close"],
-      metadata: {
-        category: { zh: "远程插件", en: "Remote Plugin" },
-        summary: {
-          zh: "用于验证远程插件商店同步与安装流程的示例插件。",
-          en: "Example plugin used to validate remote registry sync and install flows.",
-        },
-        description: {
-          zh: "该插件通过远程商店暴露，用于验证目录同步、插件包下载和平台安装。",
-          en: "Exposed through the remote registry to validate directory sync, package download, and platform installation.",
-        },
-      },
-    },
-  ];
-}
+export async function GET(request: Request) {
+  const auth = await requireConsumer(request);
+  if (auth.response) return auth.response;
 
-export async function GET() {
-  const plugins = getPluginCatalog();
+  const url = new URL(request.url);
+  const downloadOrigin = `${url.origin}/api/registry/packages`;
+  const state = await getRegistryRuntime();
+
+  const plugins = state.catalog.map((entry) => {
+    const bundle = state.demoBundles.get(`${entry.slug}@${entry.version}`);
+    return {
+      ...entry,
+      downloadUrl: `${downloadOrigin}/${entry.slug}/${entry.version}/download`,
+      checksum: bundle ? `sha256:${bundle.pipelineResult.sha256}` : null,
+      signature: bundle ? bundle.pipelineResult.signature : null,
+    };
+  });
 
   return NextResponse.json({ plugins }, {
     headers: {

@@ -94,8 +94,10 @@ model Developer {
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
 
-  plugins   PluginRecord[]
-  auditLogs AuditLog[]     @relation("AuditLogActorDeveloper")
+  plugins        PluginRecord[]
+  auditLogs      AuditLog[]      @relation("AuditLogActorDeveloper")
+  payoutAccounts PayoutAccount[]
+  payoutRequests PayoutRequest[]
 
   @@index([status, createdAt])
 }
@@ -318,9 +320,12 @@ model License {
   issuedAt        DateTime     @default(now())
   expiresAt       DateTime?
   state           LicenseState @default(ISSUED)
-  jwsCompact      String?      @db.Text // Ed25519 JWS containing license claims
-  instanceId      String?      // Bound to specific NovaPay instance
-  merchantId      String?      // Bound to specific NovaPay merchant (optional)
+  jwsCompact      String?      @db.Text
+  instanceId      String?
+  merchantId      String?
+
+  revocation LicenseRevocation?
+
   // Partial unique index for merchantId IS NULL (allows multiple nulls)
   @@unique([pluginId, instanceId, version])
 }

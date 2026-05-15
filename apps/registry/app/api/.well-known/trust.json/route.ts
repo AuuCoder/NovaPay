@@ -6,31 +6,21 @@
  *
  * Response shape (Req 19.2, 19.3):
  * {
- *   "currentKey": { keyId, alg, publicKey, notBefore, notAfter },
+ *   "currentKey":   { keyId, alg, publicKey, notBefore, notAfter },
  *   "previousKeys": [ ... ]
  * }
  *
- * `previousKeys` retains retired keys for at least 30 days after rotation.
+ * Sourced from `lib/runtime/state.ts`, which seeds an ACTIVE key on first
+ * boot. `previousKeys` retains retired keys for at least 30 days after
+ * rotation.
  */
 
 import { NextResponse } from "next/server";
-import {
-  createInMemorySigningKeyStore,
-  type SigningKeyRecord,
-} from "../../../../lib/signing/key-store";
+import type { SigningKeyRecord } from "../../../../lib/signing/key-store";
+import { getRegistryRuntime } from "../../../../lib/runtime/state";
 import { getTrustJsonCacheVersion } from "../../../../lib/signing/rotation-cache";
 
 export const runtime = "nodejs";
-
-// TODO(phase-1): Replace with a persistent store backed by Prisma once the
-// Registry database is provisioned. For now the in-memory store is populated
-// from environment variables or seed data at startup.
-function getSigningKeyStore() {
-  // Placeholder: in production this will be injected via a module-level
-  // singleton wired to the Prisma SigningKey model. During phase 1 scaffolding
-  // we return an empty store so the route is exercisable without a DB.
-  return createInMemorySigningKeyStore();
-}
 
 interface TrustJsonKey {
   keyId: string;
@@ -51,18 +41,18 @@ function toTrustJsonKey(record: SigningKeyRecord): TrustJsonKey {
 }
 
 export async function GET() {
-  const store = getSigningKeyStore();
+  const state = await getRegistryRuntime();
 
   let currentKey: TrustJsonKey | null = null;
   try {
-    const active = await store.getActive();
+    const active = await state.keyStore.getActive();
     currentKey = toTrustJsonKey(active);
   } catch {
-    // No active key provisioned yet — return empty trust document.
+    currentKey = null;
   }
 
   const now = new Date();
-  const anchors = await store.listTrustAnchors(now);
+  const anchors = await state.keyStore.listTrustAnchors(now);
   const previousKeys = anchors
     .filter((record) => record.status === "RETIRED")
     .map(toTrustJsonKey);
