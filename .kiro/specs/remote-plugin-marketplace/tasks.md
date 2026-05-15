@@ -61,74 +61,74 @@
 
 ### Registry 端
 
-- [ ] 2.1 实现 Developer 注册 / 登录 / 邮箱验证：`POST /developer/auth/register`（必填 email / password / displayName / contact，初始 `EMAIL_UNVERIFIED`）、`POST /developer/auth/login`、`POST /developer/auth/verify-email`（迁移到 `ACTIVE`），并在 `EMAIL_UNVERIFIED` 时拒绝任何 Plugin_Version 上传
+- [x] 2.1 实现 Developer 注册 / 登录 / 邮箱验证：`POST /developer/auth/register`（必填 email / password / displayName / contact，初始 `EMAIL_UNVERIFIED`）、`POST /developer/auth/login`、`POST /developer/auth/verify-email`（迁移到 `ACTIVE`），并在 `EMAIL_UNVERIFIED` 时拒绝任何 Plugin_Version 上传
   _Requirements: 5.1, 5.2, 5.3, 5.4_
-- [ ] 2.2 实现 PAT 管理与鉴权中间件：`POST /developer/tokens` / `DELETE /developer/tokens/:id`（仅落 `tokenHash`），中间件 `apps/registry/lib/auth/developer-pat.ts` 解析 `Authorization: Bearer`、无效或过期返回 401 / `INVALID_TOKEN`
+- [x] 2.2 实现 PAT 管理与鉴权中间件：`POST /developer/tokens` / `DELETE /developer/tokens/:id`（仅落 `tokenHash`），中间件 `apps/registry/lib/auth/developer-pat.ts` 解析 `Authorization: Bearer`、无效或过期返回 401 / `INVALID_TOKEN`
   _Requirements: 9.2, 9.3_
-- [ ] 2.3 实现 Developer Plugin / Version API：`POST /developer/plugins`、`GET /developer/plugins`、`POST /developer/plugins/:slug/versions`（multipart `package` ≤ 50MB）、`GET /developer/plugins/:slug/versions/:version`、`POST /developer/plugins/:slug/versions/:version/submit`，并在解析阶段对 `UNSUPPORTED_CAPABILITY` / `SLUG_OR_CHANNEL_CONFLICT` 返回结构化错误
+- [x] 2.3 实现 Developer Plugin / Version API：`POST /developer/plugins`、`GET /developer/plugins`、`POST /developer/plugins/:slug/versions`（multipart `package` ≤ 50MB）、`GET /developer/plugins/:slug/versions/:version`、`POST /developer/plugins/:slug/versions/:version/submit`，并在解析阶段对 `UNSUPPORTED_CAPABILITY` / `SLUG_OR_CHANNEL_CONFLICT` 返回结构化错误
   _Requirements: 6.1, 6.2, 6.3, 6.4, 6.8, 6.9, 6.10, 9.1_
-- [ ] 2.4 实现 Pricing 配置 `PUT /developer/plugins/:slug/pricing`：阶段 2 仅允许 `pricingMode=FREE`，对 `PAID` 字段返回 `PRICE_NOT_ALLOWED_FOR_FREE`，并写入 `PluginPricingHistory`（before/after JSON 快照与时间戳）
+- [x] 2.4 实现 Pricing 配置 `PUT /developer/plugins/:slug/pricing`：阶段 2 仅允许 `pricingMode=FREE`，对 `PAID` 字段返回 `PRICE_NOT_ALLOWED_FOR_FREE`，并写入 `PluginPricingHistory`（before/after JSON 快照与时间戳）
   _Requirements: 7.1, 7.4, 7.5, 7.6_
-- [ ] 2.5 实现安装统计聚合 `GET /developer/plugins/:slug/sales`：按日聚合 distinct NovaPay_Instance 数与启用商户数，仅返回 owner 拥有的 Plugin_Record 数据，否则 403 / `FORBIDDEN_PLUGIN`
+- [x] 2.5 实现安装统计聚合 `GET /developer/plugins/:slug/sales`：按日聚合 distinct NovaPay_Instance 数与启用商户数，仅返回 owner 拥有的 Plugin_Record 数据，否则 403 / `FORBIDDEN_PLUGIN`
   _Requirements: 8.1, 8.3, 8.4_
-- [ ] 2.6 实现 Categories 与精选：Admin API `GET/POST /admin/categories`、`PUT /admin/categories/:code`（code 全局唯一）、`POST /admin/plugins/:slug/feature`，并在 `GET /registry/plugins` 响应的 `metadata.categories[]` / `metadata.featured` 中暴露
+- [x] 2.6 实现 Categories 与精选：Admin API `GET/POST /admin/categories`、`PUT /admin/categories/:code`（code 全局唯一）、`POST /admin/plugins/:slug/feature`，并在 `GET /registry/plugins` 响应的 `metadata.categories[]` / `metadata.featured` 中暴露
   _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
-- [ ] 2.7 实现 Reject 申诉记录：在 Plugin_Record 已被 take-down 后允许 Developer 创建 `ReviewWorkflow.appealNote` 并通知所有 Registry_Admin
+- [x] 2.7 实现 Reject 申诉记录：在 Plugin_Record 已被 take-down 后允许 Developer 创建 `ReviewWorkflow.appealNote` 并通知所有 Registry_Admin
   _Requirements: 1.6, 3.3_
-- [ ] 2.8 搭建 Developer Portal Web UI：`apps/registry/app/developer/auth/page.tsx`、`plugins/page.tsx`、`plugins/[slug]/page.tsx`、`plugins/[slug]/versions/[version]/page.tsx`、`tokens/page.tsx`、`sales/page.tsx`
+- [x] 2.8 搭建 Developer Portal Web UI：`apps/registry/app/developer/auth/page.tsx`、`plugins/page.tsx`、`plugins/[slug]/page.tsx`、`plugins/[slug]/versions/[version]/page.tsx`、`tokens/page.tsx`、`sales/page.tsx`
   _Requirements: 5.1, 5.3, 8.1, 9.1_
 
 ### NovaPay 主程序端
 
-- [ ] 2.9 在 `app/admin/(console)/plugins/[slug]/page.tsx` 中按 i18n locale 优先展示 metadata 中的 `displayName / summary / description / categories.displayName`
+- [x] 2.9 在 `app/admin/(console)/plugins/[slug]/page.tsx` 中按 i18n locale 优先展示 metadata 中的 `displayName / summary / description / categories.displayName`
   _Requirements: 11.2, 11.4_
 
 ### 跨切面（审计 / 限流 / 测试）
 
-- [ ] 2.10 实现 Developer API 限流（默认 60 req/min/developer，超额 429 + `Retry-After`）并把 Developer 关键动作（创建版本、提交审核、Pricing 变更、PAT 创建/撤销）写入 `AuditLog`
+- [x] 2.10 实现 Developer API 限流（默认 60 req/min/developer，超额 429 + `Retry-After`）并把 Developer 关键动作（创建版本、提交审核、Pricing 变更、PAT 创建/撤销）写入 `AuditLog`
   _Requirements: 7.6, 9.2, 9.4, 9.5_
-- [ ] 2.11 编写 Developer 上传集成测试 `apps/registry/tests/integration/developer-upload.spec.ts`：覆盖 EMAIL_UNVERIFIED 拒绝、SemVer 倒退、`UNSUPPORTED_CAPABILITY`、`SLUG_OR_CHANNEL_CONFLICT`、超大文件五种用例，以及 Pricing FREE 路径与 `metadata.pricing` 字段一致性
+- [x] 2.11 编写 Developer 上传集成测试 `apps/registry/tests/integration/developer-upload.spec.ts`：覆盖 EMAIL_UNVERIFIED 拒绝、SemVer 倒退、`UNSUPPORTED_CAPABILITY`、`SLUG_OR_CHANNEL_CONFLICT`、超大文件五种用例，以及 Pricing FREE 路径与 `metadata.pricing` 字段一致性
   _Requirements: 5.4, 6.1, 6.3, 6.4, 6.8, 6.9, 7.1, 7.5_
 
 ## 阶段 3：付费 / License 校验 / 清结算
 
 ### Registry 端
 
-- [ ] 3.1 在 `apps/registry/prisma/schema.prisma` 中新增 `Order`、`License`、`LicenseRevocation`、`PayoutAccount`、`PayoutRequest` 模型并生成迁移；`License` 用 partial unique index 处理 `merchantId IS NULL`，并扩展 Pricing 字段以支持 `PAID`（`pricingPlanKind=PER_INSTANCE_ONE_TIME / PER_MERCHANT_SUBSCRIPTION / PER_USAGE`、`priceAmountCents`、`priceCurrency`，本期至少落地前两种）
+- [x] 3.1 在 `apps/registry/prisma/schema.prisma` 中新增 `Order`、`License`、`LicenseRevocation`、`PayoutAccount`、`PayoutRequest` 模型并生成迁移；`License` 用 partial unique index 处理 `merchantId IS NULL`，并扩展 Pricing 字段以支持 `PAID`（`pricingPlanKind=PER_INSTANCE_ONE_TIME / PER_MERCHANT_SUBSCRIPTION / PER_USAGE`、`priceAmountCents`、`priceCurrency`，本期至少落地前两种）
   _Requirements: 4.1, 7.1, 7.2, 7.3, 13.2, 18.1_
-- [ ] 3.2 实现 License 签发器与校验器：`apps/registry/lib/licensing/issuer.ts`（用 ACTIVE SigningKey 生成 Ed25519 JWS Compact 写 `License.jwsCompact`、状态 `ISSUED`）+ `apps/registry/lib/licensing/verifier.ts` + `POST /licenses/verify`，覆盖 `SIGNATURE_INVALID / EXPIRED / REVOKED / INSTANCE_MISMATCH / MERCHANT_MISMATCH / SLUG_MISMATCH / VERSION_MISMATCH / UNKNOWN_LICENSE` 全部 reason，P95 ≤ 500ms
+- [x] 3.2 实现 License 签发器与校验器：`apps/registry/lib/licensing/issuer.ts`（用 ACTIVE SigningKey 生成 Ed25519 JWS Compact 写 `License.jwsCompact`、状态 `ISSUED`）+ `apps/registry/lib/licensing/verifier.ts` + `POST /licenses/verify`，覆盖 `SIGNATURE_INVALID / EXPIRED / REVOKED / INSTANCE_MISMATCH / MERCHANT_MISMATCH / SLUG_MISMATCH / VERSION_MISMATCH / UNKNOWN_LICENSE` 全部 reason，P95 ≤ 500ms
   _Requirements: 13.2, 18.1, 18.2, 18.3, 18.4, 18.5, 19.1_
-- [ ] 3.3 实现 License 撤销 `apps/registry/lib/licensing/revocation.ts` 与对应 Admin API：写 `LicenseRevocation` 并触发 verifier 缓存失效
+- [x] 3.3 实现 License 撤销 `apps/registry/lib/licensing/revocation.ts` 与对应 Admin API：写 `LicenseRevocation` 并触发 verifier 缓存失效
   _Requirements: 13.8, 18.2_
-- [ ] 3.4 实现 NovaPay 商户 dogfood 收款集成：客户端 `apps/registry/lib/payments/novapay-client.ts`（通过 NovaPay openapi 创建付费订单、校验签名回调、把 `Order.state` 推进到 `PAID` 并触发 License 签发）+ Public API `POST /registry/plugins/:slug/orders` 与 `GET /registry/orders/:orderId`
+- [x] 3.4 实现 NovaPay 商户 dogfood 收款集成：客户端 `apps/registry/lib/payments/novapay-client.ts`（通过 NovaPay openapi 创建付费订单、校验签名回调、把 `Order.state` 推进到 `PAID` 并触发 License 签发）+ Public API `POST /registry/plugins/:slug/orders` 与 `GET /registry/orders/:orderId`
   _Requirements: 13.1, 13.2_
-- [ ] 3.5 实现余额账本与提现：每笔 License 售出后 24 小时内按分成比例计入 `Developer.balanceCents`；`POST /developer/payouts`（提交即冻结、初始 `PENDING_REVIEW`，余额不足返回 `INSUFFICIENT_BALANCE`）；`PayoutAccount` CRUD
+- [x] 3.5 实现余额账本与提现：每笔 License 售出后 24 小时内按分成比例计入 `Developer.balanceCents`；`POST /developer/payouts`（提交即冻结、初始 `PENDING_REVIEW`，余额不足返回 `INSUFFICIENT_BALANCE`）；`PayoutAccount` CRUD
   _Requirements: 4.1, 4.2, 4.3, 4.6_
-- [ ] 3.6 实现 Admin 提现审批 API：`GET /admin/payouts`、`POST /admin/payouts/:id/approve`（扣减余额）、`POST /admin/payouts/:id/reject`（解冻金额）
+- [x] 3.6 实现 Admin 提现审批 API：`GET /admin/payouts`、`POST /admin/payouts/:id/approve`（扣减余额）、`POST /admin/payouts/:id/reject`（解冻金额）
   _Requirements: 4.4, 4.5_
-- [ ] 3.7 实现 Signing Key 轮换 `POST /admin/signing-keys/rotate`：新增 ACTIVE key、旧 key 转 RETIRED 并设置 `notAfter = now + 30d`，刷新 `trust.json` 缓存
+- [x] 3.7 实现 Signing Key 轮换 `POST /admin/signing-keys/rotate`：新增 ACTIVE key、旧 key 转 RETIRED 并设置 `notAfter = now + 30d`，刷新 `trust.json` 缓存
   _Requirements: 19.2, 19.3_
 
 ### NovaPay 主程序端
 
-- [ ] 3.8 新增 `lib/plugins/license-client.ts`：导出 `verifyLicense(input)` 与 `revalidateInstalledLicenses()`，封装 `POST /licenses/verify`，并实现 `NOVAPAY_DISABLE_LICENSE_CHECK` 开关（非空时跳过远程调用并 `console.warn`；与 `NODE_ENV=production` 同时存在仍执行真实校验且打印 critical log）
+- [x] 3.8 新增 `lib/plugins/license-client.ts`：导出 `verifyLicense(input)` 与 `revalidateInstalledLicenses()`，封装 `POST /licenses/verify`，并实现 `NOVAPAY_DISABLE_LICENSE_CHECK` 开关（非空时跳过远程调用并 `console.warn`；与 `NODE_ENV=production` 同时存在仍执行真实校验且打印 critical log）
   _Requirements: 13.3, 13.4, 13.7, 13.9, 18.1_
-- [ ] 3.9 在 `prisma/schema.prisma` 上为 `PluginPurchaseRecord` 增加 `licenseKeyHash`、`licenseExpiresAt`、`verifiedAt` 三列并生成迁移
+- [x] 3.9 在 `prisma/schema.prisma` 上为 `PluginPurchaseRecord` 增加 `licenseKeyHash`、`licenseExpiresAt`、`verifiedAt` 三列并生成迁移
   _Requirements: 13.6, 23.1_
-- [ ] 3.10 在 `lib/plugins/marketplace.ts` 中以 `purchaseAndIssueLicense` 取代手动 `recordMarketplacePluginPurchase` 中的 `purchasedAt` 写入：仅当 `verifyLicense` 返回 `valid:true` 才持久化 `PluginPurchaseRecord.licenseKey/licenseKeyHash/licenseExpiresAt/verifiedAt` 与 `MarketplacePlugin.purchasedAt = license.issuedAt`；失败原因写 `notes`
+- [x] 3.10 在 `lib/plugins/marketplace.ts` 中以 `purchaseAndIssueLicense` 取代手动 `recordMarketplacePluginPurchase` 中的 `purchasedAt` 写入：仅当 `verifyLicense` 返回 `valid:true` 才持久化 `PluginPurchaseRecord.licenseKey/licenseKeyHash/licenseExpiresAt/verifiedAt` 与 `MarketplacePlugin.purchasedAt = license.issuedAt`；失败原因写 `notes`
   _Requirements: 13.3, 13.4, 13.5, 13.6_
-- [ ] 3.11 实现 24 小时 License 重新校验定时任务：调度 `revalidateInstalledLicenses`，REVOKED / EXPIRED 时自动 `MarketplacePlugin.enabled=false` 并保留安装产物以便申诉恢复
+- [x] 3.11 实现 24 小时 License 重新校验定时任务：调度 `revalidateInstalledLicenses`，REVOKED / EXPIRED 时自动 `MarketplacePlugin.enabled=false` 并保留安装产物以便申诉恢复
   _Requirements: 13.7, 13.8_
-- [ ] 3.12 在 NovaPay 商户后台安装 MERCHANT-scope 付费插件时调用 `verifyLicense` 时附带 `merchantId`：仅校验通过才创建 `MerchantInstalledPlugin`，对 `MERCHANT_MISMATCH` 返回 HTTP 409 / `LICENSE_ASSIGNED_TO_OTHER_MERCHANT`
+- [x] 3.12 在 NovaPay 商户后台安装 MERCHANT-scope 付费插件时调用 `verifyLicense` 时附带 `merchantId`：仅校验通过才创建 `MerchantInstalledPlugin`，对 `MERCHANT_MISMATCH` 返回 HTTP 409 / `LICENSE_ASSIGNED_TO_OTHER_MERCHANT`
   _Requirements: 15.1, 15.3, 15.4_
 
 ### 跨切面（审计 / 限流 / 测试）
 
-- [ ] 3.13 在 Registry `AuditLog` 与 NovaPay `AdminAuditLog` 中追加 License 签发 / 撤销、提现 approve / reject、SigningKey rotate 事件
+- [x] 3.13 在 Registry `AuditLog` 与 NovaPay `AdminAuditLog` 中追加 License 签发 / 撤销、提现 approve / reject、SigningKey rotate 事件
   _Requirements: 4.4, 4.5, 13.8, 19.3_
-- [ ] 3.14 编写 License 签发与校验集成测试 `apps/registry/tests/integration/payments-license-issuance.spec.ts`：覆盖正常签发 → 校验通过、INSTANCE_MISMATCH、MERCHANT_MISMATCH、过期、撤销、未知 license 全部分支，并基准 1000 次 verify P95 ≤ 500ms
+- [x] 3.14 编写 License 签发与校验集成测试 `apps/registry/tests/integration/payments-license-issuance.spec.ts`：覆盖正常签发 → 校验通过、INSTANCE_MISMATCH、MERCHANT_MISMATCH、过期、撤销、未知 license 全部分支，并基准 1000 次 verify P95 ≤ 500ms
   _Requirements: 13.4, 18.2, 18.3, 18.4, 18.5_
-- [ ] 3.15 编写 NovaPay 端 License 重校验回归测试：模拟 24h 后 REVOKED 返回时 `MarketplacePlugin.enabled` 自动下沉为 false、安装产物保留、`PluginPurchaseRecord.notes` 记录原因
+- [x] 3.15 编写 NovaPay 端 License 重校验回归测试：模拟 24h 后 REVOKED 返回时 `MarketplacePlugin.enabled` 自动下沉为 false、安装产物保留、`PluginPurchaseRecord.notes` 记录原因
   _Requirements: 13.4, 13.7, 13.8_
 
 ## 阶段 4：Sandboxed Runtime + 静态扫描收紧

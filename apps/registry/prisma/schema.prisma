@@ -15,6 +15,44 @@ datasource db {
 // (and their enums). Models below are intentionally kept self-consistent
 // without forward references to those phases.
 // =====================================================================
+// Phase 3: Paid / License / Payout models
+// =====================================================================
+
+enum OrderState {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+enum LicenseState {
+  ISSUED
+  REVOKED
+  EXPIRED
+}
+
+enum PricingPlanKind {
+  FREE
+  PER_INSTANCE_ONE_TIME
+  PER_MERCHANT_SUBSCRIPTION
+  PER_USAGE
+}
+
+enum PayoutState {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum PayoutAccountStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  SUSPENDED
+}
 
 enum DeveloperAccountStatus {
   EMAIL_UNVERIFIED
@@ -76,7 +114,10 @@ model PluginRecord {
   vendor           String
   description      String            @db.Text
   pricingMode      PluginPricingMode
-  priceLabel       String?
+  pricingPlanKind  PricingPlanKind?  // For PAID: PER_INSTANCE_ONE_TIME, PER_MERCHANT_SUBSCRIPTION, PER_USAGE
+  priceAmountCents Int?              // Price in cents, e.g., 2999 = $29.99
+  priceCurrency    String?           // Currency code, e.g., "CNY", "USD"
+  priceLabel       String?           // Legacy field, keep for compatibility
   publishedVersion String?
   latestVersion    String?
   visible          Boolean           @default(true)
@@ -89,9 +130,13 @@ model PluginRecord {
 
   versions        PluginVersion[]
   reviewWorkflows ReviewWorkflow[]
+  orders          Order[]
+  licenses        License[]
+  pricingHistory  PluginPricingHistory[]
 
   @@index([developerId, createdAt])
   @@index([visible, takenDown, featured])
+  @@index([pricingMode, pricingPlanKind])
 }
 
 model PluginVersion {
@@ -191,3 +236,123 @@ model RegistryConsumer {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
+
+// =====================================================================
+// Phase 3: Paid / License / Payout models
+// =====================================================================
+
+model PayoutAccount {
+  id              String              @id @default(cuid())
+  developerId     String
+  developer       Developer           @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  accountType     String              // "bank_transfer", "paypal", etc.
+  accountHolder   String
+  accountNumber   String?             // Encrypted
+  routingNumber   String?
+  bankName        String?
+  paypalEmail     String?
+  status          PayoutAccountStatus @default(PENDING_VERIFICATION)
+  verifiedAt      DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  payoutRequests PayoutRequest[]
+
+  @@index([developerId, status])
+}
+
+model PayoutRequest {
+  id              String       @id @default(cuid())
+  payoutAccountId String
+  payoutAccount   PayoutAccount @relation(fields: [payoutAccountId], references: [id], onDelete: Cascade)
+  developerId     String
+  developer       Developer    @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  amountCents     Int
+  currency        String       @default("CNY")
+  state           PayoutState  @default(PENDING_REVIEW)
+  adminNote       String?      @db.Text
+  processedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([developerId, state])
+  @@index([state, createdAt])
+}
+
+model Order {
+  id              String     @id @default(cuid())
+  orderNumber     String     @unique
+  pluginId        String
+  plugin          PluginRecord @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  version         String
+  buyerInstanceId String?    // NovaPay instance that purchased
+  buyerMerchantId String?    // NovaPay merchant that purchased
+  pricingPlanKind PricingPlanKind
+  priceAmountCents Int
+  priceCurrency   String      @default("CNY")
+  state           OrderState  @default(PENDING)
+  novapayOrderId  String?     // Reference to NovaPay order
+  paidAt          DateTime?
+  failedAt        DateTime?
+  refundedAt      DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  license License?
+
+  @@index([pluginId, state])
+  @@index([buyerInstanceId, state])
+  @@index([buyerMerchantId, state])
+}
+
+model License {
+  id              String       @id @default(cuid())
+  licenseKey      String       @unique
+  licenseKeyHash  String       @unique
+  orderId         String?      @unique
+  order           Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  pluginId        String
+  plugin          PluginRecord @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  version         String
+  pricingPlanKind PricingPlanKind
+  issuedAt        DateTime     @default(now())
+  expiresAt       DateTime?
+  state           LicenseState @default(ISSUED)
+  jwsCompact      String?      @db.Text // Ed25519 JWS containing license claims
+  instanceId      String?      // Bound to specific NovaPay instance
+  merchantId      String?      // Bound to specific NovaPay merchant (optional)
+  // Partial unique index for merchantId IS NULL (allows multiple nulls)
+  @@unique([pluginId, instanceId, version])
+}
+
+model LicenseRevocation {
+  id            String    @id @default(cuid())
+  licenseId     String    @unique
+  license       License   @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  reason        String
+  revokedById   String
+  revokedAt     DateTime  @default(now())
+  note          String?   @db.Text
+
+  @@index([revokedById, revokedAt])
+}
+
+// Extend PluginRecord with pricing history tracking
+model PluginPricingHistory {
+  id              String            @id @default(cuid())
+  pluginId        String
+  plugin          PluginRecord      @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  pricingMode     PluginPricingMode
+  pricingPlanKind PricingPlanKind?
+  priceAmountCents Int?
+  priceCurrency   String?
+  changedById     String
+  changedAt       DateTime          @default(now())
+  beforeState     Json?
+  afterState      Json?
+
+  @@index([pluginId, changedAt])
+}
+
+// Add pricing fields to PluginRecord for PAID support
+// (These will replace the current priceLabel field)

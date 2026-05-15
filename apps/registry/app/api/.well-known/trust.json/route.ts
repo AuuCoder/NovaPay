@@ -17,7 +17,8 @@ import { NextResponse } from "next/server";
 import {
   createInMemorySigningKeyStore,
   type SigningKeyRecord,
-} from "@/lib/signing/key-store";
+} from "../../../../lib/signing/key-store";
+import { getTrustJsonCacheVersion } from "../../../../lib/signing/rotation-cache";
 
 export const runtime = "nodejs";
 
@@ -70,10 +71,12 @@ export async function GET() {
     {
       currentKey,
       previousKeys,
+      cacheVersion: getTrustJsonCacheVersion(),
     },
     {
       headers: {
         "Cache-Control": "public, max-age=300, s-maxage=300",
+        ETag: `W/"trust-${getTrustJsonCacheVersion()}"`,
       },
     },
   );

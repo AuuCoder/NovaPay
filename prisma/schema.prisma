@@ -322,6 +322,9 @@ model PluginPurchaseRecord {
   source     PluginRegistrySource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
   orderReference String?
   licenseKey String?
+  licenseKeyHash   String?
+  licenseExpiresAt DateTime?
+  verifiedAt       DateTime?
   priceLabel String?
   purchaseUrl String?
   notes      String?           @db.Text
@@ -332,6 +335,7 @@ model PluginPurchaseRecord {
 
   @@index([pluginSlug, purchasedAt])
   @@index([sourceId, purchasedAt])
+  @@index([licenseKeyHash])
 }
 
 model MerchantInstalledPlugin {

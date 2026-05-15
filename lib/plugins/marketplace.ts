@@ -1447,6 +1447,203 @@ export async function recordMarketplacePluginPurchase(input: {
   };
 }
 
+/**
+ * Phase 3 (Req 13.3, 13.4, 13.5, 13.6): purchase a paid plugin via the
+ * Registry's license verification flow. The caller passes the `licenseKey`
+ * (compact JWS) returned by the Registry after payment; this function
+ * validates it through `verifyLicense`, and ONLY when the result is valid
+ * does it persist `PluginPurchaseRecord.licenseKey/licenseKeyHash/
+ * licenseExpiresAt/verifiedAt` and set `MarketplacePlugin.purchasedAt =
+ * license.iat`. Verification failures are recorded in `notes` instead.
+ */
+export async function purchaseAndIssueLicense(input: {
+  slug: string;
+  licenseKey: string;
+  version: string;
+  instanceId: string;
+  merchantId?: string | null;
+  purchasedBy?: string | null;
+  orderReference?: string | null;
+}): Promise<{
+  success: boolean;
+  reason?: string;
+  message?: string;
+  record?: { id: string };
+}> {
+  const { verifyLicense } = await import("@/lib/plugins/license-client");
+  await syncBuiltinMarketplacePlugins();
+  const prisma = getPrismaClient();
+
+  const plugin = await prisma.marketplacePlugin.findUnique({
+    where: { slug: input.slug },
+    select: {
+      id: true,
+      slug: true,
+      source: true,
+      registrySourceId: true,
+      pricingMode: true,
+      priceLabel: true,
+      purchaseUrl: true,
+    },
+  });
+
+  if (!plugin || plugin.source !== "REMOTE_SIGNED") {
+    throw new Error("当前插件不是远程商店插件。");
+  }
+  if (plugin.pricingMode !== "PAID") {
+    throw new Error("当前插件不是收费插件，无需记录购买。");
+  }
+  if (!plugin.registrySourceId) {
+    throw new Error("当前插件未关联远程商店源。");
+  }
+
+  const source = await prisma.pluginRegistrySource.findUnique({
+    where: { id: plugin.registrySourceId },
+  });
+  if (!source) {
+    throw new Error("远程商店源不存在。");
+  }
+
+  const { revealStoredSecret } = await import("@/lib/secret-box");
+  const appKey = revealStoredSecret(source.appKeyCiphertext) ?? "";
+
+  const verifyResult = await verifyLicense({
+    licenseKey: input.licenseKey,
+    pluginSlug: input.slug,
+    version: input.version,
+    instanceId: input.instanceId,
+    merchantId: input.merchantId ?? undefined,
+    registryBaseUrl: source.baseUrl,
+    appId: source.appId ?? "",
+    appKey,
+  });
+
+  if (!verifyResult.valid) {
+    const failureRecord = await prisma.pluginPurchaseRecord.create({
+      data: {
+        pluginSlug: plugin.slug,
+        sourceId: plugin.registrySourceId,
+        orderReference: input.orderReference ?? null,
+        licenseKey: null,
+        priceLabel: plugin.priceLabel,
+        purchaseUrl: plugin.purchaseUrl,
+        notes: `license verification failed: ${verifyResult.reason} — ${verifyResult.message}`,
+        purchasedBy: input.purchasedBy ?? null,
+      },
+    });
+    return {
+      success: false,
+      reason: verifyResult.reason,
+      message: verifyResult.message,
+      record: { id: failureRecord.id },
+    };
+  }
+
+  const licenseIssuedAt = new Date(verifyResult.claims.iat * 1000);
+  const [record] = await prisma.$transaction([
+    prisma.pluginPurchaseRecord.create({
+      data: {
+        pluginSlug: plugin.slug,
+        sourceId: plugin.registrySourceId,
+        orderReference: input.orderReference ?? null,
+        licenseKey: input.licenseKey,
+        licenseKeyHash: verifyResult.licenseKeyHash,
+        licenseExpiresAt: verifyResult.licenseExpiresAt,
+        verifiedAt: new Date(),
+        priceLabel: plugin.priceLabel,
+        purchaseUrl: plugin.purchaseUrl,
+        notes: null,
+        purchasedBy: input.purchasedBy ?? null,
+      },
+    }),
+    prisma.marketplacePlugin.update({
+      where: { slug: plugin.slug },
+      data: {
+        purchasedAt: licenseIssuedAt,
+      },
+    }),
+  ]);
+
+  return { success: true, record: { id: record.id } };
+}
+
+/**
+ * Phase 3 (Req 13.7, 13.8): periodic re-verification of installed paid
+ * plugin licenses. Iterates over `PluginPurchaseRecord` rows with a stored
+ * `licenseKey`, calls the Registry, and disables `MarketplacePlugin` rows
+ * whose licenses are now REVOKED or EXPIRED. The install path is preserved
+ * so the admin can appeal and restore.
+ */
+export async function revalidateInstalledPluginLicenses(input?: {
+  instanceId?: string;
+}): Promise<{ inspected: number; disabled: number }> {
+  const { verifyLicense } = await import("@/lib/plugins/license-client");
+  const { revealStoredSecret } = await import("@/lib/secret-box");
+  const { getSystemConfig } = await import("@/lib/system-config");
+
+  const prisma = getPrismaClient();
+  const records = await prisma.pluginPurchaseRecord.findMany({
+    where: {
+      licenseKey: { not: null },
+    },
+    include: {
+      plugin: {
+        select: { slug: true, version: true, enabled: true, installed: true },
+      },
+      source: true,
+    },
+    orderBy: [{ purchasedAt: "desc" }],
+  });
+
+  const instanceId = input?.instanceId ?? (await getSystemConfig("INSTANCE_ID"));
+  if (!instanceId) {
+    return { inspected: 0, disabled: 0 };
+  }
+
+  let inspected = 0;
+  let disabled = 0;
+  // Track which slugs we've already evaluated to avoid double work when a
+  // plugin has multiple purchase records.
+  const seenSlugs = new Set<string>();
+
+  for (const record of records) {
+    if (!record.licenseKey || !record.source || !record.plugin) continue;
+    if (seenSlugs.has(record.plugin.slug)) continue;
+    seenSlugs.add(record.plugin.slug);
+    inspected += 1;
+
+    const appKey = revealStoredSecret(record.source.appKeyCiphertext) ?? "";
+    const result = await verifyLicense({
+      licenseKey: record.licenseKey,
+      pluginSlug: record.plugin.slug,
+      version: record.plugin.version,
+      instanceId,
+      registryBaseUrl: record.source.baseUrl,
+      appId: record.source.appId ?? "",
+      appKey,
+    });
+
+    if (
+      !result.valid &&
+      (result.reason === "REVOKED" || result.reason === "EXPIRED")
+    ) {
+      await prisma.marketplacePlugin.update({
+        where: { slug: record.plugin.slug },
+        data: { enabled: false },
+      });
+      await prisma.pluginPurchaseRecord.update({
+        where: { id: record.id },
+        data: {
+          notes: `license ${result.reason.toLowerCase()} on revalidation: ${result.message}`,
+        },
+      });
+      disabled += 1;
+    }
+  }
+
+  return { inspected, disabled };
+}
+
 export async function listMerchantMarketplacePaymentPlugins(
   merchantId: string,
   locale: Locale = "zh",
@@ -1477,6 +1674,25 @@ export async function listMerchantMarketplacePaymentPlugins(
     }));
 }
 
+export class MerchantPluginInstallError extends Error {
+  readonly code: "LICENSE_ASSIGNED_TO_OTHER_MERCHANT" | "LICENSE_INVALID";
+  readonly statusCode: number;
+  readonly reason?: string;
+
+  constructor(
+    code: "LICENSE_ASSIGNED_TO_OTHER_MERCHANT" | "LICENSE_INVALID",
+    message: string,
+    statusCode = 409,
+    reason?: string,
+  ) {
+    super(message);
+    this.name = "MerchantPluginInstallError";
+    this.code = code;
+    this.statusCode = statusCode;
+    this.reason = reason;
+  }
+}
+
 export async function installMerchantMarketplacePlugin(input: {
   merchantId: string;
   slug: string;
@@ -1496,6 +1712,9 @@ export async function installMerchantMarketplacePlugin(input: {
       displayName: true,
       version: true,
       kind: true,
+      pricingMode: true,
+      source: true,
+      registrySourceId: true,
     },
   });
 
@@ -1505,6 +1724,71 @@ export async function installMerchantMarketplacePlugin(input: {
 
   if (!plugin.installed || !plugin.enabled) {
     throw new Error("当前插件尚未在平台侧启用，暂时不能安装到商户工作台。");
+  }
+
+  // Req 15.1, 15.3, 15.4: For paid REMOTE_SIGNED plugins, verify the
+  // merchant-scoped license before allowing the merchant to install. Look up
+  // the most recent verified purchase record for this plugin and call the
+  // Registry's verify endpoint with `merchantId`.
+  if (plugin.pricingMode === "PAID" && plugin.source === "REMOTE_SIGNED") {
+    const purchaseRecord = await prisma.pluginPurchaseRecord.findFirst({
+      where: {
+        pluginSlug: plugin.slug,
+        licenseKey: { not: null },
+        verifiedAt: { not: null },
+      },
+      orderBy: [{ verifiedAt: "desc" }],
+      include: { source: true },
+    });
+
+    if (!purchaseRecord || !purchaseRecord.licenseKey || !purchaseRecord.source) {
+      throw new MerchantPluginInstallError(
+        "LICENSE_INVALID",
+        "当前付费插件尚未完成平台级许可证验证，无法分配给商户。",
+        409,
+      );
+    }
+
+    const { verifyLicense } = await import("@/lib/plugins/license-client");
+    const { revealStoredSecret } = await import("@/lib/secret-box");
+    const { getSystemConfig } = await import("@/lib/system-config");
+    const instanceId = await getSystemConfig("INSTANCE_ID");
+    if (!instanceId) {
+      throw new MerchantPluginInstallError(
+        "LICENSE_INVALID",
+        "实例 ID 未初始化，无法校验许可证。",
+        500,
+      );
+    }
+
+    const appKey = revealStoredSecret(purchaseRecord.source.appKeyCiphertext) ?? "";
+    const verifyResult = await verifyLicense({
+      licenseKey: purchaseRecord.licenseKey,
+      pluginSlug: plugin.slug,
+      version: plugin.version,
+      instanceId,
+      merchantId: input.merchantId,
+      registryBaseUrl: purchaseRecord.source.baseUrl,
+      appId: purchaseRecord.source.appId ?? "",
+      appKey,
+    });
+
+    if (!verifyResult.valid) {
+      if (verifyResult.reason === "MERCHANT_MISMATCH") {
+        throw new MerchantPluginInstallError(
+          "LICENSE_ASSIGNED_TO_OTHER_MERCHANT",
+          "当前许可证已绑定其他商户，无法分配给该商户。",
+          409,
+          verifyResult.reason,
+        );
+      }
+      throw new MerchantPluginInstallError(
+        "LICENSE_INVALID",
+        `许可证校验失败: ${verifyResult.reason} — ${verifyResult.message}`,
+        409,
+        verifyResult.reason,
+      );
+    }
   }
 
   await prisma.merchantInstalledPlugin.upsert({
