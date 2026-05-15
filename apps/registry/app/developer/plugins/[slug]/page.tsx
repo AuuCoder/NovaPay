@@ -52,7 +52,12 @@ export default async function DeveloperPluginDetailPage({
             </div>
             <div style={{ display: "flex", gap: 12 }}>
               <button className="btn btn-tertiary">Configure pricing</button>
-              <button className="btn btn-primary">Upload new version</button>
+              <Link
+                href={`/developer/plugins/${slug}/upload`}
+                className="btn btn-primary"
+              >
+                Upload new version
+              </Link>
             </div>
           </div>
         </div>

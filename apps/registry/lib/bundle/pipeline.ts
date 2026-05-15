@@ -20,6 +20,7 @@ import { parsePluginPackageManifest, type PluginPackageManifest } from "../manif
 import { type ObjectStoreClient, buildPackageObjectKey } from "../storage/object-store";
 import type { Ed25519Signer } from "../signing/signer";
 import type { SigningKeyStore } from "../signing/key-store";
+import { extractBundle } from "./extract";
 
 export interface BundlePipelineInput {
   /** Raw bundle bytes (tar.gz or zip content, or JSON-encoded bundle for phase 1) */
@@ -116,25 +117,15 @@ export async function runBundlePipeline(
 
 /**
  * Extracts the raw plugin.json text from the bundle bytes.
- * Phase 1: JSON bundles have a top-level `manifest` field.
- * Future: tar.gz/zip extraction will read `plugin.json` from the archive.
+ * Supports tar.gz, JSON, and auto-detection by magic bytes.
  */
 function extractManifestRaw(
   rawBytes: Buffer,
   contentType: BundlePipelineInput["contentType"],
 ): string {
-  if (contentType === "application/json") {
-    const parsed = JSON.parse(rawBytes.toString("utf8")) as Record<string, unknown>;
-    if (!parsed.manifest || typeof parsed.manifest !== "object") {
-      throw new Error("JSON bundle must contain a top-level 'manifest' field.");
-    }
-    return JSON.stringify(parsed.manifest, null, 2);
+  const result = extractBundle(rawBytes, contentType);
+  if (!result.manifestRaw) {
+    throw new Error("Bundle does not contain a plugin.json manifest.");
   }
-
-  // For tar.gz / zip: placeholder that will be replaced with real extraction.
-  // In phase 1 all uploads go through the JSON path.
-  throw new Error(
-    `Binary bundle extraction (${contentType}) is not yet implemented. ` +
-    "Use application/json format for phase 1 uploads.",
-  );
+  return result.manifestRaw;
 }

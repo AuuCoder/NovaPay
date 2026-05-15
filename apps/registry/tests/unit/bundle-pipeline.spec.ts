@@ -146,11 +146,11 @@ describe("runBundlePipeline", () => {
           { rawBytes, contentType: "application/json" },
           { objectStore, signer, keyStore },
         ),
-      /must contain a top-level 'manifest' field/,
+      /does not contain a plugin\.json manifest/,
     );
   });
 
-  it("rejects binary content types in phase 1", async () => {
+  it("rejects invalid gzip content gracefully", async () => {
     const { keyStore, objectStore, signer } = setupDeps();
     await keyStore.rotate({
       newKey: {
@@ -163,7 +163,8 @@ describe("runBundlePipeline", () => {
       },
     });
 
-    const rawBytes = Buffer.from([0x1f, 0x8b, 0x08]); // gzip magic bytes
+    // Truncated gzip — will fail during gunzip
+    const rawBytes = Buffer.from([0x1f, 0x8b, 0x08]);
 
     await assert.rejects(
       () =>
@@ -171,7 +172,7 @@ describe("runBundlePipeline", () => {
           { rawBytes, contentType: "application/gzip" },
           { objectStore, signer, keyStore },
         ),
-      /Binary bundle extraction.*not yet implemented/,
+      /incorrect header check|unexpected end/i,
     );
   });
 });

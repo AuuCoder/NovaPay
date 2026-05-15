@@ -107,6 +107,15 @@ export interface RegistryRuntimeState {
 let state: RegistryRuntimeState | null = null;
 let initPromise: Promise<RegistryRuntimeState> | null = null;
 
+/**
+ * When `REGISTRY_STORE_DRIVER=prisma`, the runtime uses Prisma-backed stores
+ * connected to the Registry Postgres database. Otherwise falls back to the
+ * in-memory stores (suitable for dev/test).
+ */
+function shouldUsePrisma(): boolean {
+  return process.env.REGISTRY_STORE_DRIVER === "prisma";
+}
+
 function buildDemoBundle(opts: {
   slug: string;
   channelCode: string;
@@ -178,6 +187,34 @@ function buildDemoBundle(opts: {
 }
 
 async function initState(): Promise<RegistryRuntimeState> {
+  const usePrisma = shouldUsePrisma();
+
+  // When Prisma driver is selected, swap stores below for Prisma-backed
+  // implementations. The signing key + demo bundles still seed in-process
+  // for now (catalog + demo bundles will move to PluginRecord/PluginVersion
+  // tables in a follow-up). The data-only stores (revocations, orders,
+  // ledger, audit, consumers) switch over fully.
+  let prismaStores: ReturnType<typeof import("./prisma-stores").createPrismaStores> | null = null;
+  if (usePrisma) {
+    try {
+      const { getPrismaClient } = await import("./prisma-client");
+      const { createPrismaStores } = await import("./prisma-stores");
+      const prisma = await getPrismaClient();
+      if (prisma) {
+        prismaStores = createPrismaStores(prisma as Parameters<typeof createPrismaStores>[0]);
+      } else {
+        console.warn(
+          "[registry] REGISTRY_STORE_DRIVER=prisma but Prisma client could not be loaded — falling back to in-memory stores. Run `prisma generate` first.",
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[registry] Failed to initialise Prisma stores — falling back to in-memory:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   const keyStore = createInMemorySigningKeyStore();
   const adapter = createLocalKeyPairAdapter();
   const rotation = await rotateSigningKey(
@@ -336,14 +373,18 @@ async function initState(): Promise<RegistryRuntimeState> {
     signer,
     signingPrivateKey,
     signingKeyPair: rotation.keyPair,
-    revocations,
-    orderStore,
-    ledger,
-    auditLogger,
+    revocations: prismaStores?.revocationStore ?? revocations,
+    orderStore: prismaStores?.orderStore ?? orderStore,
+    ledger: prismaStores?.ledger ?? ledger,
+    auditLogger: prismaStores?.auditLogger ?? auditLogger,
     objectStore,
     demoBundles,
     catalog,
-    consumers,
+    consumers: prismaStores?.consumerLookup
+      ? Object.assign({}, prismaStores.consumerLookup, {
+          register: consumers.register, // keep in-memory register for dev
+        })
+      : consumers,
   };
 }
 
