@@ -9,6 +9,7 @@ import {
   updateMerchantApiCredentialStatusAction,
 } from "@/app/admin/actions";
 import {
+  buildPageHref,
   getCallbackStatusLabel,
   formatDateTime,
   formatMoney,
@@ -241,6 +242,7 @@ export default async function MerchantDetailPage({
           routingEyebrow: "Routing",
           routingTitle: "Channel routing",
           routingButton: "Open Binding Center",
+          pluginButton: "Open Plugin",
           noBindings: "No routing bindings are configured for this merchant yet.",
           channelCol: "Channel",
           targetCol: "Routing Target",
@@ -263,6 +265,7 @@ export default async function MerchantDetailPage({
           accountUpdatedAt: "Updated",
           accountVerifiedAt: "Last Verified",
           accountError: "Latest Error",
+          accountPluginButton: "View Plugin",
           credentialsEyebrow: "API Credentials",
           credentialsTitle: "Merchant API credentials",
           credentialsDescription:
@@ -373,6 +376,7 @@ export default async function MerchantDetailPage({
           routingEyebrow: "Routing",
           routingTitle: "通道路由",
           routingButton: "进入绑定中心",
+          pluginButton: "查看插件",
           noBindings: "当前商户还没有配置通道绑定。",
           channelCol: "通道",
           targetCol: "路由目标",
@@ -395,6 +399,7 @@ export default async function MerchantDetailPage({
           accountUpdatedAt: "更新于",
           accountVerifiedAt: "最近校验",
           accountError: "最近错误",
+          accountPluginButton: "查看插件",
           credentialsEyebrow: "API Credentials",
           credentialsTitle: "商户 API 凭证",
           credentialsDescription:
@@ -839,7 +844,19 @@ export default async function MerchantDetailPage({
                   <tbody>
                     {merchant.channelBindings.map((binding) => (
                       <tr key={binding.id} className="border-t border-line/70">
-                        <td className="px-4 py-4 font-mono text-xs text-foreground">{binding.channelCode}</td>
+                        <td className="px-4 py-4 text-xs">
+                          <p className="font-mono text-foreground">{binding.channelCode}</p>
+                          <Link
+                            href={buildPageHref(
+                              "/admin/plugins",
+                              { channelCode: binding.channelCode },
+                              1,
+                            )}
+                            className="mt-2 inline-flex rounded-xl border border-line bg-white px-2.5 py-1.5 text-[11px] font-medium text-foreground"
+                          >
+                            {content.pluginButton}
+                          </Link>
+                        </td>
                         <td className="px-4 py-4 text-xs text-muted">
                           {binding.merchantChannelAccount ? (
                             <>
@@ -914,6 +931,18 @@ export default async function MerchantDetailPage({
                 {account.lastErrorMessage ? (
                   <p className="mt-2 text-xs text-[#9b3d18]">{content.accountError}：{account.lastErrorMessage}</p>
                 ) : null}
+                <div className="mt-4">
+                  <Link
+                    href={buildPageHref(
+                      "/admin/plugins",
+                      { channelCode: account.channelCode },
+                      1,
+                    )}
+                    className="inline-flex rounded-xl border border-line bg-white px-3 py-2 text-xs font-medium text-foreground"
+                  >
+                    {content.accountPluginButton}
+                  </Link>
+                </div>
               </article>
             ))}
           </div>

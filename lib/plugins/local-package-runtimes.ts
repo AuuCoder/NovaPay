@@ -143,7 +143,10 @@ function assertRuntimeModuleShape(
     );
   }
 
-  if (manifest.supportsCallbackRoute || candidate.callbacks !== undefined) {
+  if (
+    manifest.source === "LOCAL_PACKAGE" &&
+    (manifest.supportsCallbackRoute || candidate.callbacks !== undefined)
+  ) {
     throw new Error(
       "Third-party local plugin runtime callbacks are not supported yet in the current runnable stage.",
     );
@@ -233,11 +236,12 @@ export async function loadPaymentPluginRuntimeInspectionFromManifestPath(
   const manifest = await readPluginPackageManifestFile(manifestPath, source);
 
   // Req 21.1: REMOTE_SIGNED plugins load through the worker_threads sandbox
-  // when the sandbox feature flag is enabled. Other sources (LOCAL_PACKAGE,
-  // BUILTIN) continue using the direct import path.
+  // only when the sandbox feature flag is explicitly enabled. Other sources
+  // (LOCAL_PACKAGE, BUILTIN) and the default REMOTE_SIGNED path continue
+  // using the direct import path.
   if (
     source === "REMOTE_SIGNED" &&
-    process.env.NOVAPAY_PLUGIN_SANDBOX_ENABLED !== "0"
+    process.env.NOVAPAY_PLUGIN_SANDBOX_ENABLED === "1"
   ) {
     return {
       manifest,

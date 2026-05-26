@@ -46,7 +46,7 @@ describe("payments + license issuance integration", () => {
     const env = await setup();
     const order = await createPluginOrder(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         pluginId: "plg-1",
         developerId: "dev-1",
         version: "0.1.0",
@@ -64,7 +64,7 @@ describe("payments + license issuance integration", () => {
     const result = await verifyLicense(
       {
         jwsCompact: paid.licenseJwsCompact,
-        expectedSlug: "remote.demo",
+        expectedSlug: "thirdparty.sample-pay",
         expectedVersion: "0.1.0",
         expectedInstanceId: "inst-A",
       },
@@ -78,7 +78,7 @@ describe("payments + license issuance integration", () => {
     const env = await setup();
     const order = await createPluginOrder(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         pluginId: "plg-1",
         developerId: "dev-1",
         version: "0.1.0",
@@ -108,7 +108,7 @@ describe("payments + license issuance integration", () => {
     const env = await setup();
     const order = await createPluginOrder(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         pluginId: "plg-1",
         developerId: "dev-1",
         version: "0.1.0",
@@ -136,7 +136,7 @@ describe("payments + license issuance integration", () => {
     const env = await setup();
     const order = await createPluginOrder(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         pluginId: "plg-1",
         developerId: "dev-1",
         version: "0.1.0",
@@ -175,7 +175,7 @@ describe("payments + license issuance integration", () => {
     const env = await setup();
     const order = await createPluginOrder(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         pluginId: "plg-1",
         developerId: "dev-1",
         version: "0.1.0",

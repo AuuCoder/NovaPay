@@ -34,6 +34,9 @@ export interface RemoteRegistryPluginRecord {
   latestVersion: string;
   runtimeMode: "MANIFEST_ONLY" | "RUNNABLE";
   pricingMode: "FREE" | "PAID";
+  pricingPlanKind?: string | null;
+  priceAmountCents?: number | null;
+  priceCurrency?: string | null;
   priceLabel?: string | null;
   purchaseUrl?: string | null;
   downloadUrl: string;
@@ -50,6 +53,18 @@ export interface RemoteRegistrySnapshot {
   plugins: RemoteRegistryPluginRecord[];
 }
 
+export interface PluginRegistrySyncRuntimeStatus {
+  sourceId: string;
+  sourceName: string | null;
+  sourceBaseUrl: string | null;
+  attemptedAt: Date;
+  success: boolean;
+  pluginCount: number | null;
+  errorMessage: string | null;
+}
+
+const syncRuntimeStatusBySourceId = new Map<string, PluginRegistrySyncRuntimeStatus>();
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -64,6 +79,10 @@ function asNonEmptyString(value: unknown, label: string) {
 
 function asOptionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function asOptionalInteger(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
 function asStringArray(value: unknown, label: string) {
@@ -117,6 +136,9 @@ function parseRemotePluginRecord(
     latestVersion: asNonEmptyString(raw.latestVersion, `plugins[${index}].latestVersion`),
     runtimeMode,
     pricingMode,
+    pricingPlanKind: asOptionalString(raw.pricingPlanKind),
+    priceAmountCents: asOptionalInteger(raw.priceAmountCents),
+    priceCurrency: asOptionalString(raw.priceCurrency),
     priceLabel: asOptionalString(raw.priceLabel),
     purchaseUrl: asOptionalString(raw.purchaseUrl),
     downloadUrl: asNonEmptyString(raw.downloadUrl, `plugins[${index}].downloadUrl`),
@@ -128,7 +150,29 @@ function parseRemotePluginRecord(
 }
 
 function buildRegistryPluginsUrl(baseUrl: string) {
-  return new URL("/registry/plugins", baseUrl).toString();
+  return new URL("/api/registry/plugins", baseUrl).toString();
+}
+
+function recordRegistrySyncRuntimeStatus(
+  status: PluginRegistrySyncRuntimeStatus,
+) {
+  syncRuntimeStatusBySourceId.set(status.sourceId, status);
+}
+
+function toErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function getPluginRegistrySyncRuntimeStatuses() {
+  return new Map(
+    [...syncRuntimeStatusBySourceId.entries()].map(([sourceId, status]) => [
+      sourceId,
+      {
+        ...status,
+        attemptedAt: new Date(status.attemptedAt),
+      },
+    ]),
+  );
 }
 
 export async function fetchRemoteRegistrySnapshot(sourceId: string) {
@@ -178,12 +222,24 @@ export async function fetchRemoteRegistrySnapshot(sourceId: string) {
     await verifyRegistryTrustKey(source);
   }
 
-  return {
+  const snapshot = {
     sourceId: source.id,
     sourceName: source.name,
     sourceBaseUrl: source.baseUrl,
     plugins: payload.plugins.map((item, index) => parseRemotePluginRecord(item, index)),
   } satisfies RemoteRegistrySnapshot;
+
+  recordRegistrySyncRuntimeStatus({
+    sourceId: source.id,
+    sourceName: source.name,
+    sourceBaseUrl: source.baseUrl,
+    attemptedAt: new Date(),
+    success: true,
+    pluginCount: snapshot.plugins.length,
+    errorMessage: null,
+  });
+
+  return snapshot;
 }
 
 export async function listPluginRegistrySources() {
@@ -194,13 +250,31 @@ export async function listPluginRegistrySources() {
 
 export async function fetchRemoteRegistrySnapshots(): Promise<RemoteRegistrySnapshot[]> {
   const sources = await listPluginRegistrySources();
-  const snapshots = await Promise.all(
-    sources
-      .filter((source) => source.enabled)
-      .map((source) => fetchRemoteRegistrySnapshot(source.id)),
+  const enabledSources = sources.filter((source) => source.enabled);
+  const snapshots = await Promise.allSettled(
+    enabledSources.map((source) => fetchRemoteRegistrySnapshot(source.id)),
   );
 
-  return snapshots.filter((snapshot): snapshot is RemoteRegistrySnapshot => Boolean(snapshot));
+  return snapshots.flatMap((snapshot, index) => {
+    if (snapshot.status === "fulfilled") {
+      return snapshot.value ? [snapshot.value] : [];
+    }
+
+    const source = enabledSources[index];
+    if (source) {
+      recordRegistrySyncRuntimeStatus({
+        sourceId: source.id,
+        sourceName: source.name,
+        sourceBaseUrl: source.baseUrl,
+        attemptedAt: new Date(),
+        success: false,
+        pluginCount: null,
+        errorMessage: toErrorMessage(snapshot.reason),
+      });
+    }
+    console.error("[plugin-registry] failed to sync source:", snapshot.reason);
+    return [];
+  });
 }
 
 interface TrustJsonResponse {
@@ -211,7 +285,7 @@ interface TrustJsonResponse {
 }
 
 function buildTrustJsonUrl(baseUrl: string) {
-  return new URL("/.well-known/trust.json", baseUrl).toString();
+  return new URL("/api/.well-known/trust.json", baseUrl).toString();
 }
 
 /**

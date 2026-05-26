@@ -47,7 +47,9 @@ export function createKmsSignerAdapter(config: KmsAdapterConfig): SignerAdapter 
       // Dynamic import so the module doesn't fail at parse time when the
       // SDK isn't installed.
       const { KMSClient, SignCommand } = await import("@aws-sdk/client-kms") as {
-        KMSClient: new (config: { region?: string; endpoint?: string }) => KmsClientLike;
+        KMSClient: new (config: { region?: string; endpoint?: string }) => {
+          send(command: unknown): Promise<{ Signature?: Uint8Array }>;
+        };
         SignCommand: new (input: KmsSignInput) => unknown;
       };
 

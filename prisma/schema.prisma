@@ -144,6 +144,7 @@ model Merchant {
   channelBindings       MerchantChannelBinding[]
   channelAccounts       MerchantChannelAccount[]
   installedPlugins      MerchantInstalledPlugin[]
+  pluginPurchaseRecords PluginPurchaseRecord[]
   apiCredentials        MerchantApiCredential[]
   users                 MerchantUser[]
   idempotencyRecords    MerchantIdempotencyRecord[]
@@ -318,6 +319,8 @@ model PluginPurchaseRecord {
   id         String            @id @default(cuid())
   pluginSlug String
   plugin     MarketplacePlugin @relation(fields: [pluginSlug], references: [slug], onDelete: Cascade)
+  merchantId String?
+  merchant   Merchant?         @relation(fields: [merchantId], references: [id], onDelete: SetNull)
   sourceId   String?
   source     PluginRegistrySource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
   orderReference String?
@@ -334,6 +337,7 @@ model PluginPurchaseRecord {
   updatedAt  DateTime          @updatedAt
 
   @@index([pluginSlug, purchasedAt])
+  @@index([merchantId, pluginSlug, purchasedAt])
   @@index([sourceId, purchasedAt])
   @@index([licenseKeyHash])
 }

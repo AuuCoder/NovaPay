@@ -3,11 +3,17 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { getRegistryRuntime } from "../../../../../lib/runtime/state";
+import { requireRegistryAdminRequest } from "../../../../lib/auth/session";
+import { getRegistryRuntime } from "../../../../lib/runtime/state";
 
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
+  const auth = await requireRegistryAdminRequest(request);
+  if (auth.response) {
+    return auth.response;
+  }
+
   const { searchParams } = new URL(request.url);
   const developerId = searchParams.get("developerId") ?? undefined;
   const state = await getRegistryRuntime();

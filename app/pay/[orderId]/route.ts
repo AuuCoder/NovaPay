@@ -1040,6 +1040,231 @@ function renderAlipayCheckoutPage(input: {
 </html>`;
 }
 
+function renderGenericRedirectCheckoutPage(input: {
+  orderId: string;
+  externalOrderId: string;
+  subject: string;
+  amount: string;
+  currency: string;
+  checkoutUrl: string;
+  expireAt: Date | null;
+  channelCode: string;
+  channelPayload: Record<string, unknown> | null;
+}) {
+  const providerName =
+    typeof input.channelPayload?.providerDisplayName === "string" &&
+    input.channelPayload.providerDisplayName
+      ? input.channelPayload.providerDisplayName
+      : input.channelCode;
+  const countdownTargetMs = isValidDate(input.expireAt)
+    ? input.expireAt.getTime()
+    : null;
+  const initialCountdown = countdownTargetMs
+    ? formatCountdown(Math.max(countdownTargetMs - Date.now(), 0))
+    : "--:--";
+
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(providerName)} 支付</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(30, 112, 219, 0.18), transparent 42%),
+          linear-gradient(180deg, #f5f8fc 0%, #eef4fb 100%);
+        color: #16324f;
+      }
+      main {
+        width: min(100%, 920px);
+        border-radius: 28px;
+        overflow: hidden;
+        border: 1px solid rgba(22, 50, 79, 0.08);
+        background: rgba(255, 255, 255, 0.97);
+        box-shadow: 0 28px 90px rgba(22, 50, 79, 0.14);
+      }
+      .layout {
+        display: grid;
+      }
+      @media (min-width: 920px) {
+        .layout { grid-template-columns: 360px 1fr; }
+      }
+      .hero-panel {
+        padding: 32px 28px;
+        background: linear-gradient(180deg, #1e70db 0%, #1758aa 100%);
+        color: white;
+      }
+      .content-panel { padding: 32px 28px; }
+      .eyebrow {
+        margin: 0;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        opacity: 0.82;
+      }
+      h1 {
+        margin: 12px 0 0;
+        font-size: 32px;
+        line-height: 1.15;
+      }
+      .lead {
+        margin: 14px 0 0;
+        font-size: 15px;
+        line-height: 1.9;
+        color: rgba(255, 255, 255, 0.88);
+      }
+      .meta-grid {
+        display: grid;
+        gap: 14px;
+        margin-top: 24px;
+      }
+      .meta-item {
+        border-radius: 20px;
+        padding: 18px;
+        background: rgba(255, 255, 255, 0.14);
+      }
+      .meta-label {
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        opacity: 0.72;
+      }
+      .meta-value {
+        margin-top: 8px;
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .card {
+        border-radius: 24px;
+        border: 1px solid rgba(22, 50, 79, 0.08);
+        background: #fff;
+        padding: 24px;
+      }
+      .title {
+        margin: 0;
+        font-size: 26px;
+        color: #16324f;
+      }
+      .body {
+        margin: 10px 0 0;
+        font-size: 15px;
+        line-height: 1.9;
+        color: #49627f;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 52px;
+        padding: 0 24px;
+        border-radius: 16px;
+        text-decoration: none;
+        font-weight: 700;
+        background: #1e70db;
+        color: white;
+        box-shadow: 0 14px 32px rgba(30, 112, 219, 0.22);
+      }
+      .code {
+        margin-top: 16px;
+        border-radius: 16px;
+        background: #f5f8fc;
+        padding: 14px 16px;
+        font-size: 13px;
+        color: #36506c;
+        word-break: break-all;
+      }
+      .hint {
+        margin-top: 18px;
+        font-size: 13px;
+        color: #627d98;
+        line-height: 1.8;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="layout">
+        <section class="hero-panel">
+          <p class="eyebrow">NovaPay Hosted Checkout</p>
+          <h1>${escapeHtml(providerName)}</h1>
+          <p class="lead">
+            当前订单将通过第三方支付插件跳转到 ${escapeHtml(providerName)} 完成支付。完成后会回到 NovaPay 托管结果页。
+          </p>
+
+          <div class="meta-grid">
+            <div class="meta-item">
+              <div class="meta-label">订单号</div>
+              <div class="meta-value">${escapeHtml(input.externalOrderId)}</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">支付金额</div>
+              <div class="meta-value">${escapeHtml(formatAmount(input.amount, input.currency))}</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">剩余时间</div>
+              <div class="meta-value" id="countdown">${escapeHtml(initialCountdown)}</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="content-panel">
+          <div class="card">
+            <h2 class="title">${escapeHtml(input.subject)}</h2>
+            <p class="body">
+              点击下方按钮前往 ${escapeHtml(providerName)} 收银台继续支付。若未自动回跳，你也可以返回当前页面查看支付状态。
+            </p>
+
+            <div style="margin-top: 24px;">
+              <a class="button" href="${escapeHtml(input.checkoutUrl)}">前往 ${escapeHtml(providerName)} 支付</a>
+            </div>
+
+            <div class="code">${escapeHtml(input.checkoutUrl)}</div>
+            <p class="hint">
+              如果浏览器、风控页或第三方平台提示等待中，请保留当前页并在完成后回到 NovaPay 查看最终支付结果。
+            </p>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script>
+      const target = ${JSON.stringify(countdownTargetMs)};
+      if (target) {
+        const countdownNode = document.getElementById("countdown");
+        const format = (seconds) => {
+          const totalSeconds = Math.max(0, Math.ceil(seconds));
+          const h = Math.floor(totalSeconds / 3600);
+          const m = Math.floor((totalSeconds % 3600) / 60);
+          const s = totalSeconds % 60;
+          if (h > 0) {
+            return [h, m, s].map((value) => String(value).padStart(2, "0")).join(":");
+          }
+          return [m, s].map((value) => String(value).padStart(2, "0")).join(":");
+        };
+        const update = () => {
+          const remaining = (target - Date.now()) / 1000;
+          countdownNode.textContent = format(remaining);
+          if (remaining <= 0) {
+            clearInterval(timer);
+          }
+        };
+        update();
+        const timer = setInterval(update, 1000);
+      }
+    </script>
+  </body>
+</html>`;
+}
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ orderId: string }> },
@@ -1146,6 +1371,62 @@ export async function GET(
     }
 
     const html = renderAlipayCheckoutPage({
+      orderId: order.id,
+      externalOrderId: order.externalOrderId,
+      subject: order.subject,
+      amount: order.amount,
+      currency: order.currency,
+      checkoutUrl: order.checkoutUrl,
+      expireAt: order.expireAt,
+    });
+
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  const mode =
+    order.channelPayload &&
+    typeof order.channelPayload.mode === "string"
+      ? order.channelPayload.mode
+      : null;
+
+  if (mode === "redirect") {
+    if (isTerminalPaymentStatus(order.status)) {
+      return Response.redirect(buildHostedPaymentReturnUrl(order.id), 302);
+    }
+
+    const html = renderGenericRedirectCheckoutPage({
+      orderId: order.id,
+      externalOrderId: order.externalOrderId,
+      subject: order.subject,
+      amount: order.amount,
+      currency: order.currency,
+      checkoutUrl: order.checkoutUrl,
+      expireAt: order.expireAt,
+      channelCode: order.channelCode,
+      channelPayload: order.channelPayload,
+    });
+
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  if (mode === "qr_code") {
+    if (isTerminalPaymentStatus(order.status)) {
+      return Response.redirect(buildHostedPaymentReturnUrl(order.id), 302);
+    }
+
+    const html = await renderWxpayCheckoutPage({
       orderId: order.id,
       externalOrderId: order.externalOrderId,
       subject: order.subject,

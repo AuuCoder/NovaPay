@@ -20,8 +20,8 @@ import {
 } from "@/app/merchant/actions";
 import { CopyFieldList, type CopyFieldItem } from "@/app/merchant/copy-field-list";
 import {
+  getActiveMerchantChannelTemplates,
   buildMerchantChannelCallbackUrl,
-  getMerchantChannelTemplates,
   maskMerchantChannelConfig,
   supportsMerchantChannelCallbackRoute,
 } from "@/lib/merchant-channel-accounts";
@@ -47,9 +47,12 @@ export default async function MerchantChannelsPage({
   const session = await requireMerchantPermission("channel:read");
   const prisma = getPrismaClient();
   const resolvedSearchParams = (await searchParams) ?? {};
-  const messages = await readPageMessages(resolvedSearchParams);
+  const messages = await readPageMessages(searchParams);
   const locale = await getCurrentLocale();
-  const merchantChannelTemplates = getMerchantChannelTemplates(locale);
+  const merchantChannelTemplates = await getActiveMerchantChannelTemplates(
+    session.merchantUser.merchantId,
+    locale,
+  );
   const canManageChannels = hasMerchantPermission(session.merchantUser.role, "channel:write");
   const merchant = await prisma.merchant.findUnique({
     where: {
@@ -94,24 +97,6 @@ export default async function MerchantChannelsPage({
     merchantChannelTemplates[0] ??
     null;
 
-  if (!selectedTemplate) {
-    return null;
-  }
-
-  const selectedDefaultBinding = bindingsByChannel.get(selectedTemplate.channelCode);
-  const selectedAccounts = merchant.channelAccounts.filter(
-    (account) => account.channelCode === selectedTemplate.channelCode,
-  );
-  const selectedTemplateBlockedByProfile =
-    selectedTemplate.requiresMerchantProfileCompletion && hasProfileGaps;
-  const selectedChannelHref = `/merchant/channels?channel=${selectedTemplate.channelCode}`;
-  const selectedDefaultReady = Boolean(
-    selectedDefaultBinding?.enabled &&
-      selectedAccounts.some(
-        (account) =>
-          account.id === selectedDefaultBinding.merchantChannelAccountId && account.enabled,
-      ),
-  );
   const content =
     locale === "en"
       ? {
@@ -119,6 +104,10 @@ export default async function MerchantChannelsPage({
           title: "Merchant-owned payment channel instances",
           description:
             "Maintain merchant-owned payment channel instances here. After Alipay or WeChat Pay credentials are recorded, NovaPay generates a dedicated upstream payment callback URL and route token for each instance.",
+          pluginMarketButton: "Open Plugin Market",
+          noInstalledTitle: "Install a plugin before configuring channels",
+          noInstalledDesc:
+            "This workspace does not have any merchant-installed payment plugins yet. Open the plugin market first, install the channels you need, then return here to configure credentials.",
           selectorEyebrow: "Channel Selection",
           selectorTitle: "Choose a payment channel",
           selectorDesc:
@@ -180,6 +169,10 @@ export default async function MerchantChannelsPage({
           title: "支付通道实例",
           description:
             "在此维护商户自有支付通道实例。录入支付宝或微信支付参数后，系统会为每个实例生成独立上游支付回调地址与路由标识。",
+          pluginMarketButton: "打开插件市场",
+          noInstalledTitle: "请先安装插件再配置通道",
+          noInstalledDesc:
+            "当前商户工作台还没有安装任何支付插件。请先前往插件市场安装所需通道，再回到这里录入支付参数。",
           selectorEyebrow: "支付通道",
           selectorTitle: "选择需要配置的支付通道",
           selectorDesc: "先选择通道，再查看该通道对应的字段和已有实例，避免不同通道参数同时铺开。",
@@ -234,12 +227,54 @@ export default async function MerchantChannelsPage({
             "这里只展示可复制的非敏感已配置字段。私钥、公钥等敏感参数仍然只允许重新录入，不支持导出。",
         };
 
+  if (!selectedTemplate) {
+    return (
+      <div className="space-y-8">
+        <AdminPageHeader
+          eyebrow={content.eyebrow}
+          title={content.title}
+          description={content.description}
+          actions={
+            <Link href="/merchant/plugins" className={buttonClass}>
+              {content.pluginMarketButton}
+            </Link>
+          }
+        />
+        <FlashMessage success={messages.success} error={messages.error} />
+        <section className={`${panelClass} border-dashed p-8 text-center`}>
+          <p className="text-lg font-semibold text-foreground">{content.noInstalledTitle}</p>
+          <p className="mt-2 text-sm leading-7 text-muted">{content.noInstalledDesc}</p>
+        </section>
+      </div>
+    );
+  }
+
+  const selectedDefaultBinding = bindingsByChannel.get(selectedTemplate.channelCode);
+  const selectedAccounts = merchant.channelAccounts.filter(
+    (account) => account.channelCode === selectedTemplate.channelCode,
+  );
+  const selectedTemplateBlockedByProfile =
+    selectedTemplate.requiresMerchantProfileCompletion && hasProfileGaps;
+  const selectedChannelHref = `/merchant/channels?channel=${selectedTemplate.channelCode}`;
+  const selectedDefaultReady = Boolean(
+    selectedDefaultBinding?.enabled &&
+      selectedAccounts.some(
+        (account) =>
+          account.id === selectedDefaultBinding.merchantChannelAccountId && account.enabled,
+      ),
+  );
+
   return (
     <div className="space-y-8">
       <AdminPageHeader
         eyebrow={content.eyebrow}
         title={content.title}
         description={content.description}
+        actions={
+          <Link href="/merchant/plugins" className={buttonClass}>
+            {content.pluginMarketButton}
+          </Link>
+        }
       />
 
       <FlashMessage success={messages.success} error={messages.error} />

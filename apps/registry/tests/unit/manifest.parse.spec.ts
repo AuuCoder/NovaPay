@@ -13,19 +13,19 @@ import {
 function buildValidRaw(): Record<string, unknown> {
   return {
     manifestVersion: 1,
-    slug: "remote.demo-runnable-crypto",
+    slug: "thirdparty.sample-runnable-crypto",
     kind: "PAYMENT_CHANNEL",
     channelCode: "crypto.remote-runnable",
     providerKey: "crypto",
-    packageName: "@novapay/remote-demo-runnable",
-    displayName: "Remote Demo Runnable Plugin",
-    vendor: "NovaPay Remote Demo",
-    description: "A demo plugin used to validate the remote pipeline.",
+    packageName: "@vendor/sample-runnable",
+    displayName: "Sample Runnable Plugin",
+    vendor: "Vendor Sample",
+    description: "A sample plugin used to validate the remote pipeline.",
     version: "0.1.0",
     capabilities: ["native_qr", "return_url", "order_close"],
     category: { zh: "加密货币", en: "Crypto" },
-    summary: { zh: "演示远程加密插件", en: "Remote crypto demo" },
-    detail: { zh: "用于验证远程签名插件的端到端流程。", en: "End-to-end remote demo." },
+    summary: { zh: "示例远程加密插件", en: "Remote crypto sample" },
+    detail: { zh: "用于验证远程签名插件的端到端流程。", en: "End-to-end remote sample." },
     supportsCallbackRoute: true,
     requiresMerchantProfileCompletion: false,
     runtimeEntrypoint: "dist/runtime.mjs",
@@ -41,13 +41,13 @@ describe("parsePluginPackageManifest", () => {
     const raw = buildValidRaw();
     const manifest = parsePluginPackageManifest(raw);
 
-    assert.equal(manifest.slug, "remote.demo-runnable-crypto");
+    assert.equal(manifest.slug, "thirdparty.sample-runnable-crypto");
     assert.equal(manifest.kind, "PAYMENT_CHANNEL");
     assert.equal(manifest.channelCode, "crypto.remote-runnable");
     assert.equal(manifest.providerKey, "crypto");
-    assert.equal(manifest.packageName, "@novapay/remote-demo-runnable");
-    assert.equal(manifest.displayName, "Remote Demo Runnable Plugin");
-    assert.equal(manifest.vendor, "NovaPay Remote Demo");
+    assert.equal(manifest.packageName, "@vendor/sample-runnable");
+    assert.equal(manifest.displayName, "Sample Runnable Plugin");
+    assert.equal(manifest.vendor, "Vendor Sample");
     assert.equal(manifest.version, "0.1.0");
     assert.equal(manifest.manifestVersion, 1);
     assert.equal(manifest.supportsCallbackRoute, true);
@@ -60,12 +60,12 @@ describe("parsePluginPackageManifest", () => {
     ]);
     assert.deepEqual(manifest.category, { zh: "加密货币", en: "Crypto" });
     assert.deepEqual(manifest.summary, {
-      zh: "演示远程加密插件",
-      en: "Remote crypto demo",
+      zh: "示例远程加密插件",
+      en: "Remote crypto sample",
     });
     assert.deepEqual(manifest.detail, {
       zh: "用于验证远程签名插件的端到端流程。",
-      en: "End-to-end remote demo.",
+      en: "End-to-end remote sample.",
     });
     // Default source applied when caller omits options.
     assert.equal(manifest.source, "REMOTE_SIGNED");
@@ -157,14 +157,12 @@ describe("parsePluginPackageManifest", () => {
     );
   });
 
-  it("rejects providerKey values outside the whitelist", () => {
+  it("accepts third-party providerKey values outside the old core whitelist", () => {
     const raw = clone(buildValidRaw());
     raw.providerKey = "stripe";
 
-    assert.throws(
-      () => parsePluginPackageManifest(raw),
-      /Unsupported providerKey: stripe/,
-    );
+    const manifest = parsePluginPackageManifest(raw);
+    assert.equal(manifest.providerKey, "stripe");
   });
 
   it("rejects capabilities outside the whitelist", () => {

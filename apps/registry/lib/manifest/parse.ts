@@ -6,9 +6,11 @@
  *   - Required field set is identical: slug, kind, channelCode, providerKey,
  *     packageName, displayName, vendor, description, version, capabilities,
  *     category, summary, detail.
- *   - Whitelists are identical: ALLOWED_KINDS = {"PAYMENT_CHANNEL"},
- *     ALLOWED_PROVIDER_KEYS = {"alipay","wxpay","crypto"},
- *     ALLOWED_CAPABILITIES = same 10-entry set.
+ *   - Whitelists are identical except `providerKey`, which is intentionally
+ *     open-ended on the Registry side so third-party payment platforms can be
+ *     onboarded without a NovaPay core release.
+ *   - ALLOWED_KINDS = {"PAYMENT_CHANNEL"} and ALLOWED_CAPABILITIES keep the
+ *     same 10-entry set.
  *   - Bilingual fields (`category`, `summary`, `detail`) require non-empty `zh` + `en`.
  *   - `manifestVersion` defaults to 1 when missing or non-integer.
  *   - `supportsCallbackRoute` / `requiresMerchantProfileCompletion` default to false.
@@ -34,7 +36,7 @@ export interface LocalizedText {
   en: string;
 }
 
-export type ManifestProviderKey = "alipay" | "wxpay" | "crypto";
+export type ManifestProviderKey = string;
 
 export type ManifestPaymentCapability =
   | "page_redirect"
@@ -47,6 +49,25 @@ export type ManifestPaymentCapability =
   | "order_close"
   | "refund"
   | "refund_query";
+
+export type VerificationExecutionMode =
+  | "AUTO_ONLY"
+  | "AUTO_WITH_OPTIONAL_MANUAL_PAYMENT";
+
+export type VerificationRequiredCheck = "create_payment";
+
+export interface VerificationProfile {
+  version: number;
+  pluginType: "PAYMENT_CHANNEL";
+  executionMode: VerificationExecutionMode;
+  requiredConfigKeys: string[];
+  requiredChecks: VerificationRequiredCheck[];
+  expectedCreatePayment?: {
+    status?: Array<"requires_action" | "processing">;
+    mode?: Array<"redirect" | "qr_code">;
+    checkoutUrl?: "required" | "optional";
+  };
+}
 
 export interface PluginPackageManifest {
   slug: string;
@@ -67,6 +88,7 @@ export interface PluginPackageManifest {
   requiresMerchantProfileCompletion: boolean;
   manifestVersion: number;
   runtimeEntrypoint: string | null;
+  verificationProfile?: VerificationProfile;
   /**
    * Original plugin.json text (preserved verbatim, NOT used in equality checks).
    * The pretty-printer can read this when round-tripping; it is never re-emitted
@@ -78,11 +100,6 @@ export interface PluginPackageManifest {
 }
 
 const ALLOWED_KINDS: ReadonlySet<string> = new Set(["PAYMENT_CHANNEL"]);
-const ALLOWED_PROVIDER_KEYS: ReadonlySet<string> = new Set([
-  "alipay",
-  "wxpay",
-  "crypto",
-]);
 const ALLOWED_CAPABILITIES: ReadonlySet<ManifestPaymentCapability> = new Set<
   ManifestPaymentCapability
 >([
@@ -147,6 +164,103 @@ function asCapabilities(value: unknown): ManifestPaymentCapability[] {
   return capabilities;
 }
 
+function asStringArray(value: unknown, label: string) {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array.`);
+  }
+
+  return value.map((item, index) =>
+    asNonEmptyString(item, `${label}[${index}]`),
+  );
+}
+
+function asVerificationProfile(value: unknown): VerificationProfile | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    throw new Error("verificationProfile must be an object.");
+  }
+
+  const executionMode = asNonEmptyString(
+    value.executionMode,
+    "verificationProfile.executionMode",
+  );
+
+  if (
+    executionMode !== "AUTO_ONLY" &&
+    executionMode !== "AUTO_WITH_OPTIONAL_MANUAL_PAYMENT"
+  ) {
+    throw new Error("verificationProfile.executionMode is invalid.");
+  }
+
+  const requiredChecks = asStringArray(
+    value.requiredChecks,
+    "verificationProfile.requiredChecks",
+  ) as VerificationRequiredCheck[];
+
+  for (const check of requiredChecks) {
+    if (check !== "create_payment") {
+      throw new Error(`Unsupported verificationProfile.requiredCheck: ${check}`);
+    }
+  }
+
+  const requiredConfigKeys = asStringArray(
+    value.requiredConfigKeys,
+    "verificationProfile.requiredConfigKeys",
+  );
+
+  let expectedCreatePayment: VerificationProfile["expectedCreatePayment"] | undefined;
+  if (value.expectedCreatePayment !== undefined && value.expectedCreatePayment !== null) {
+    if (!isRecord(value.expectedCreatePayment)) {
+      throw new Error("verificationProfile.expectedCreatePayment must be an object.");
+    }
+
+    const status = value.expectedCreatePayment.status;
+    const mode = value.expectedCreatePayment.mode;
+    const checkoutUrl = value.expectedCreatePayment.checkoutUrl;
+
+    expectedCreatePayment = {
+      status: Array.isArray(status)
+        ? status.map((item, index) =>
+            asNonEmptyString(
+              item,
+              `verificationProfile.expectedCreatePayment.status[${index}]`,
+            ),
+          ) as Array<"requires_action" | "processing">
+        : undefined,
+      mode: Array.isArray(mode)
+        ? mode.map((item, index) =>
+            asNonEmptyString(
+              item,
+              `verificationProfile.expectedCreatePayment.mode[${index}]`,
+            ),
+          ) as Array<"redirect" | "qr_code">
+        : undefined,
+      checkoutUrl:
+        checkoutUrl === "required" || checkoutUrl === "optional"
+          ? checkoutUrl
+          : undefined,
+    };
+    if (checkoutUrl !== undefined && expectedCreatePayment.checkoutUrl === undefined) {
+      throw new Error("verificationProfile.expectedCreatePayment.checkoutUrl is invalid.");
+    }
+  }
+
+  return {
+    version:
+      typeof value.version === "number" && Number.isInteger(value.version)
+        ? value.version
+        : 1,
+    pluginType: "PAYMENT_CHANNEL",
+    executionMode,
+    requiredConfigKeys,
+    requiredChecks,
+    expectedCreatePayment,
+  };
+}
+
 export interface ParsePluginPackageManifestOptions {
   /**
    * Origin of the package. Defaults to `REMOTE_SIGNED` because Registry-issued
@@ -178,10 +292,6 @@ export function parsePluginPackageManifest(
 
   const providerKey = asNonEmptyString(raw.providerKey, "providerKey");
 
-  if (!ALLOWED_PROVIDER_KEYS.has(providerKey)) {
-    throw new Error(`Unsupported providerKey: ${providerKey}`);
-  }
-
   const manifestVersion =
     typeof raw.manifestVersion === "number" &&
     Number.isInteger(raw.manifestVersion)
@@ -196,7 +306,7 @@ export function parsePluginPackageManifest(
     kind: "PAYMENT_CHANNEL",
     source,
     channelCode: asNonEmptyString(raw.channelCode, "channelCode"),
-    providerKey: providerKey as ManifestProviderKey,
+    providerKey,
     packageName: asNonEmptyString(raw.packageName, "packageName"),
     displayName: asNonEmptyString(raw.displayName, "displayName"),
     vendor: asNonEmptyString(raw.vendor, "vendor"),
@@ -213,6 +323,7 @@ export function parsePluginPackageManifest(
     ),
     manifestVersion,
     runtimeEntrypoint,
+    verificationProfile: asVerificationProfile(raw.verificationProfile),
   };
 
   if (typeof options.rawJson === "string") {

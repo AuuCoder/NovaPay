@@ -9,6 +9,13 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
+import { requireRegistryAdminRequest } from "../../../../../../lib/auth/session";
+import {
+  apiError,
+  resolveApiMessage,
+  resolveRequestLocale,
+} from "../../../../../../lib/api/response";
+import { getRegistryRuntime, takeDownPlugin } from "../../../../../../lib/runtime/state";
 
 export const runtime = "nodejs";
 
@@ -16,13 +23,14 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const { slug } = await params;
+  const auth = await requireRegistryAdminRequest(request);
+  if (auth.response) {
+    return auth.response;
+  }
 
-  // Phase 1 placeholder: in production this would:
-  // 1. Verify admin session
-  // 2. Update PluginRecord.visible = false, takenDown = true, takenDownReason
-  // 3. Write AuditLog entry
-  // 4. Return within 5 seconds (Req 3.1)
+  const { slug } = await params;
+  const locale = resolveRequestLocale(request);
+  const state = await getRegistryRuntime();
 
   let reason: string | null = null;
   try {
@@ -32,11 +40,24 @@ export async function POST(
     // No body or invalid JSON — reason is optional
   }
 
+  const result = await takeDownPlugin({
+    state,
+    slug,
+    actorId: auth.session.actorId,
+    reason,
+    ip: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+  });
+
+  if (!result.success) {
+    return apiError(request, "INVALID_TRANSITION", 409);
+  }
+
   return NextResponse.json({
     slug,
     takenDown: true,
     visible: false,
-    reason: reason ?? "Emergency take-down by admin.",
-    message: `Plugin ${slug} has been taken down.`,
+    affectedVersions: result.updatedVersions.map((record) => record.version),
+    reason: reason ?? resolveApiMessage(locale, "TAKEDOWN_DEFAULT_REASON"),
+    message: resolveApiMessage(locale, "TAKEDOWN_SUCCESS", { slug }),
   });
 }

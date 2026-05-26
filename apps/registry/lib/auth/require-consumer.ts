@@ -17,6 +17,7 @@ import {
   type ConsumerAuthResult,
 } from "./consumer-app-key";
 import { getRegistryRuntime } from "../runtime/state";
+import { apiError } from "../api/response";
 
 export interface RequireConsumerSuccess {
   response: null;
@@ -36,9 +37,23 @@ export type RequireConsumerOutcome =
  * When `REGISTRY_AUTH_DISABLED=1` (dev only), authentication is skipped and
  * a stub consumer is returned. This lets the main NovaPay app sync without
  * configuring appId/appKey during local development.
+ *
+ * In production (NODE_ENV=production) the bypass is ignored and a CRITICAL
+ * log warns about the misconfiguration — same pattern as
+ * NOVAPAY_DISABLE_LICENSE_CHECK on the main app side.
  */
 function isAuthDisabled(): boolean {
-  return process.env.REGISTRY_AUTH_DISABLED === "1";
+  if (process.env.REGISTRY_AUTH_DISABLED !== "1") return false;
+
+  if (process.env.NODE_ENV === "production") {
+    console.error(
+      "[registry-auth] CRITICAL: REGISTRY_AUTH_DISABLED=1 is set in production. " +
+        "Ignoring and enforcing real consumer authentication.",
+    );
+    return false;
+  }
+
+  return true;
 }
 
 export async function requireConsumer(
@@ -64,12 +79,11 @@ export async function requireConsumer(
 
   if (!result.authenticated) {
     return {
-      response: NextResponse.json(
-        {
-          error: result.errorCode,
-          message: result.errorMessage,
-        },
-        { status: 401 },
+      response: apiError(
+        request,
+        result.errorCode,
+        401,
+        undefined,
       ),
       consumer: null,
     };

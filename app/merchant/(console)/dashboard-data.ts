@@ -14,6 +14,7 @@ import type { Locale } from "@/lib/i18n";
 import { hasMerchantPermission } from "@/lib/merchant-rbac";
 import { requireMerchantSession } from "@/lib/merchant-session";
 import { getPublicBaseUrl } from "@/lib/env";
+import { listMerchantInstalledPaymentChannels } from "@/lib/plugins/marketplace";
 import { getPrismaClient } from "@/lib/prisma";
 
 export async function loadMerchantDashboardData(
@@ -149,6 +150,9 @@ export async function loadMerchantDashboardData(
         },
       }),
     ]);
+  const installedPaymentChannels = await listMerchantInstalledPaymentChannels(
+    session.merchantUser.merchantId,
+  );
 
   const activeCredentialCount = merchant.apiCredentials.filter(
     (credential) =>
@@ -205,14 +209,14 @@ export async function loadMerchantDashboardData(
     )?.channelCode ??
     merchant.channelAccounts.find((account) => account.enabled)?.channelCode ??
     "";
-  const checkoutTestChannels = [
-    {
-      code: "alipay.page",
-    },
-    {
-      code: "wxpay.native",
-    },
-  ].filter((channel) => {
+  const checkoutTestChannels = installedPaymentChannels
+    .filter(
+      (channel) => channel.code === "alipay.page" || channel.code === "wxpay.native",
+    )
+    .map((channel) => ({
+      code: channel.code,
+    }))
+    .filter((channel) => {
     const hasUsableBinding = merchant.channelBindings.some(
       (binding) =>
         binding.channelCode === channel.code &&
@@ -223,10 +227,10 @@ export async function loadMerchantDashboardData(
       return true;
     }
 
-    return merchant.channelAccounts.some(
-      (account) => account.enabled && account.channelCode === channel.code,
-    );
-  });
+      return merchant.channelAccounts.some(
+        (account) => account.enabled && account.channelCode === channel.code,
+      );
+    });
 
   return {
     session,

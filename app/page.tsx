@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getCurrentLocale } from "@/lib/i18n-server";
-import { listPaymentChannels } from "@/lib/payments/registry";
+import { listAvailablePaymentChannels } from "@/lib/payments/registry";
+import { getMainSiteSetupStatus } from "@/lib/platform-setup";
 
 const stack = [
   "Next.js 16 + App Router",
@@ -13,7 +15,12 @@ const stack = [
 
 export default async function Home() {
   const locale = await getCurrentLocale();
-  const channels = listPaymentChannels();
+  const setupStatus = await getMainSiteSetupStatus();
+  const channels = await listAvailablePaymentChannels();
+
+  if (!setupStatus.setupComplete) {
+    redirect("/setup");
+  }
 
   const content =
     locale === "en"

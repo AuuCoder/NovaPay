@@ -19,8 +19,8 @@ import {
 } from "@/lib/merchant-credential-reveal";
 import { revealMerchantCredentialSecret } from "@/lib/merchant-credentials";
 import {
+  getActiveMerchantChannelTemplate,
   generateMerchantChannelCallbackToken,
-  getMerchantChannelTemplate,
 } from "@/lib/merchant-channel-accounts";
 import { generateMerchantApiCredential } from "@/lib/merchant-credentials";
 import {
@@ -29,6 +29,13 @@ import {
   getMerchantPaymentOrder,
 } from "@/lib/orders/service";
 import { hashPassword } from "@/lib/password";
+import {
+  installMerchantMarketplacePlugin,
+  isMerchantPaymentPluginInstalled,
+  listMerchantInstalledPaymentChannels,
+  purchaseAndIssueLicense,
+  uninstallMerchantMarketplacePlugin,
+} from "@/lib/plugins/marketplace";
 import {
   assertMerchantProfileCompleteForChannel,
   createPendingMerchantName,
@@ -217,6 +224,7 @@ function resolveNotifySecretForStorage(input: {
 
 function revalidateMerchantPaths() {
   revalidatePath("/merchant");
+  revalidatePath("/merchant/plugins");
   revalidatePath("/merchant/integration");
   revalidatePath("/merchant/profile");
   revalidatePath("/merchant/credentials");
@@ -274,8 +282,12 @@ async function createMerchantApiCredentialRecord(
   throw new Error("系统生成 API 凭证失败，请稍后重试。");
 }
 
-function getMerchantChannelTemplateOrThrow(channelCode: string) {
-  const template = getMerchantChannelTemplate(channelCode);
+async function getMerchantChannelTemplateOrThrow(channelCode: string) {
+  const session = await requireMerchantSession();
+  const template = await getActiveMerchantChannelTemplate(
+    session.merchantUser.merchantId,
+    channelCode,
+  );
 
   if (!template) {
     throw new Error("暂不支持该支付通道。");
@@ -299,7 +311,11 @@ async function assertUsdtChannelAddressAvailable(input: {
   walletAddress: string;
   excludeAccountId?: string;
 }) {
-  const template = getMerchantChannelTemplate(input.channelCode);
+  const session = await requireMerchantSession();
+  const template = await getActiveMerchantChannelTemplate(
+    session.merchantUser.merchantId,
+    input.channelCode,
+  );
 
   if (!template || template.providerKey !== "crypto") {
     return;
@@ -353,8 +369,8 @@ async function assertUsdtChannelAddressAvailable(input: {
   }
 }
 
-function readMerchantChannelConfig(channelCode: string, formData: FormData) {
-  const template = getMerchantChannelTemplateOrThrow(channelCode);
+async function readMerchantChannelConfig(channelCode: string, formData: FormData) {
+  const template = await getMerchantChannelTemplateOrThrow(channelCode);
   const config: Record<string, string> = {};
 
   for (const field of template.fields) {
@@ -960,7 +976,14 @@ export async function runMerchantCheckoutSmokeTestAction(formData: FormData) {
       throw new Error("商户不存在。");
     }
 
-    const preferredChannelCodes = ["alipay.page", "wxpay.native"] as const;
+    const preferredChannelCodes = (
+      await listMerchantInstalledPaymentChannels(session.merchantUser.merchantId)
+    )
+      .map((channel) => channel.code)
+      .filter(
+        (channelCode): channelCode is "alipay.page" | "wxpay.native" =>
+          channelCode === "alipay.page" || channelCode === "wxpay.native",
+      );
     const availableChannelCodes = preferredChannelCodes.filter((candidate) => {
       const hasUsableBinding = merchant.channelBindings.some(
         (binding) =>
@@ -1089,6 +1112,14 @@ export async function createMerchantChannelAccountAction(formData: FormData) {
 
   try {
     const channelCode = getRequiredString(formData, "channelCode", "支付通道");
+    const pluginInstalled = await isMerchantPaymentPluginInstalled(
+      session.merchantUser.merchantId,
+      channelCode,
+    );
+
+    if (!pluginInstalled) {
+      throw new Error("请先在插件市场安装当前支付插件后，再创建通道实例。");
+    }
     const shouldEnable = getBoolean(formData, "enabled");
     const prisma = getPrismaClient();
     const merchant = await prisma.merchant.findUnique({
@@ -1115,7 +1146,7 @@ export async function createMerchantChannelAccountAction(formData: FormData) {
     }
 
     const displayName = getRequiredString(formData, "displayName", "通道名称");
-    const { template, config } = readMerchantChannelConfig(channelCode, formData);
+    const { template, config } = await readMerchantChannelConfig(channelCode, formData);
 
     if (template.providerKey === "crypto") {
       await assertUsdtChannelAddressAvailable({
@@ -1209,13 +1240,22 @@ export async function updateMerchantChannelAccountAction(formData: FormData) {
       throw new Error("指定的支付通道实例不存在。");
     }
 
+    const pluginInstalled = await isMerchantPaymentPluginInstalled(
+      session.merchantUser.merchantId,
+      existing.channelCode,
+    );
+
+    if (!pluginInstalled) {
+      throw new Error("当前支付插件尚未安装到商户工作台，请先前往插件市场安装。");
+    }
+
     if (requestedEnabled && !existing.enabled) {
       assertMerchantProfileCompleteForChannel(merchant, existing.channelCode, {
         prefix: "请先完善以下商户资料后再启用该支付通道：",
       });
     }
 
-    const { template, config } = readMerchantChannelConfig(existing.channelCode, formData);
+    const { template, config } = await readMerchantChannelConfig(existing.channelCode, formData);
 
     if (template.providerKey === "crypto") {
       await assertUsdtChannelAddressAvailable({
@@ -1266,6 +1306,253 @@ export async function updateMerchantChannelAccountAction(formData: FormData) {
   }
 
   redirect(withMessage(redirectTo, "success", "支付通道实例已更新。"));
+}
+
+export async function installMerchantMarketplacePluginAction(formData: FormData) {
+  const session = await requireMerchantPermission("channel:write");
+  const redirectTo = getRedirectTo(formData, "/merchant/plugins");
+
+  try {
+    const slug = getRequiredString(formData, "slug", "插件标识");
+    const plugin = await installMerchantMarketplacePlugin({
+      merchantId: session.merchantUser.merchantId,
+      slug,
+    });
+
+    await writeAdminAuditLog({
+      actor: getMerchantAuditActor(session),
+      action: "merchant.plugin.install",
+      resourceType: "merchant_plugin",
+      resourceId: plugin.id,
+      summary: `商户 ${session.merchantUser.merchant.code} 安装插件 ${plugin.slug}。`,
+      metadata: {
+        slug: plugin.slug,
+        channelCode: plugin.channelCode,
+        version: plugin.version,
+      },
+    });
+    revalidateMerchantPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "插件已安装到当前商户工作台。"));
+}
+
+export async function purchaseMerchantMarketplacePluginAction(formData: FormData) {
+  const session = await requireMerchantPermission("channel:write");
+  const redirectTo = getRedirectTo(formData, "/merchant/plugins");
+
+  try {
+    const slug = getRequiredString(formData, "slug", "插件标识");
+    const prisma = getPrismaClient();
+
+    const plugin = await prisma.marketplacePlugin.findUnique({
+      where: { slug },
+      select: {
+        slug: true,
+        source: true,
+        version: true,
+        pricingMode: true,
+        registrySourceId: true,
+      },
+    });
+
+    if (!plugin || plugin.source !== "REMOTE_SIGNED" || plugin.pricingMode !== "PAID") {
+      throw new Error("当前插件不是远程收费插件，无法发起购买。");
+    }
+
+    if (!plugin.registrySourceId) {
+      throw new Error("当前插件未关联远程商店源。");
+    }
+
+    const source = await prisma.pluginRegistrySource.findUnique({
+      where: { id: plugin.registrySourceId },
+    });
+
+    if (!source) {
+      throw new Error("远程商店源不存在。");
+    }
+
+    const { revealStoredSecret } = await import("@/lib/secret-box");
+    const { ensureInstanceId } = await import("@/lib/system-config");
+    const instanceId = await ensureInstanceId();
+    const appKey = revealStoredSecret(source.appKeyCiphertext) ?? "";
+
+    const orderUrl = new URL(`/api/registry/plugins/${slug}/orders`, source.baseUrl).toString();
+    const returnUrl = `${process.env.NOVAPAY_PUBLIC_BASE_URL?.trim() || "http://localhost:3000"}/merchant/plugins/${slug}?registryPluginSlug=${encodeURIComponent(slug)}&registryOrderId=${encodeURIComponent(`pending`)}`;
+
+    const orderRes = await fetch(orderUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-novapay-registry-app-id": source.appId ?? "",
+        "x-novapay-registry-app-key": appKey,
+      },
+      body: JSON.stringify({
+        instanceId,
+        merchantId: session.merchantUser.merchantId,
+        returnUrl,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!orderRes.ok) {
+      const errorBody = await orderRes.text();
+      throw new Error(`Registry 订单创建失败 (HTTP ${orderRes.status}): ${errorBody}`);
+    }
+
+    const orderData = (await orderRes.json()) as {
+      orderId: string;
+      state: string;
+      license?: { licenseKey: string } | null;
+      checkoutUrl?: string | null;
+    };
+
+    if (orderData.state === "PAID" && orderData.license?.licenseKey) {
+      const result = await purchaseAndIssueLicense({
+        slug,
+        licenseKey: orderData.license.licenseKey,
+        version: plugin.version,
+        instanceId,
+        merchantId: session.merchantUser.merchantId,
+        purchasedBy: session.merchantUser.merchant.code,
+        orderReference: orderData.orderId,
+        markPluginPurchased: false,
+      });
+
+      if (!result.success) {
+        throw new Error(`许可证验证失败: ${result.reason} — ${result.message}`);
+      }
+
+      redirect(withMessage(redirectTo, "success", "收费插件已购买并完成许可证登记。"));
+    }
+
+    if (orderData.checkoutUrl) {
+      const checkoutUrl = new URL(orderData.checkoutUrl);
+      checkoutUrl.searchParams.set("registryPluginSlug", plugin.slug);
+      checkoutUrl.searchParams.set("registryOrderId", orderData.orderId);
+      redirect(checkoutUrl.toString());
+    }
+
+    throw new Error("Registry 返回了未知的订单状态，请稍后重试。");
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(redirectTo);
+}
+
+export async function finalizeMerchantMarketplacePluginPurchaseAction(input: {
+  slug: string;
+  registryOrderId: string;
+}) {
+  const session = await requireMerchantPermission("channel:write");
+  const prisma = getPrismaClient();
+
+  const plugin = await prisma.marketplacePlugin.findUnique({
+    where: { slug: input.slug },
+    select: {
+      slug: true,
+      version: true,
+      source: true,
+      pricingMode: true,
+      registrySourceId: true,
+    },
+  });
+
+  if (!plugin || plugin.source !== "REMOTE_SIGNED" || plugin.pricingMode !== "PAID") {
+    throw new Error("当前插件不是远程收费插件，无法完成购买回写。");
+  }
+
+  if (!plugin.registrySourceId) {
+    throw new Error("当前插件未关联远程商店源。");
+  }
+
+  const source = await prisma.pluginRegistrySource.findUnique({
+    where: { id: plugin.registrySourceId },
+  });
+  if (!source) {
+    throw new Error("远程商店源不存在。");
+  }
+
+  const { revealStoredSecret } = await import("@/lib/secret-box");
+  const { ensureInstanceId } = await import("@/lib/system-config");
+  const instanceId = await ensureInstanceId();
+  const appKey = revealStoredSecret(source.appKeyCiphertext) ?? "";
+
+  const orderUrl = new URL(`/api/registry/orders/${input.registryOrderId}`, source.baseUrl).toString();
+  const orderRes = await fetch(orderUrl, {
+    method: "GET",
+    headers: {
+      "x-novapay-registry-app-id": source.appId ?? "",
+      "x-novapay-registry-app-key": appKey,
+    },
+    cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!orderRes.ok) {
+    throw new Error(`Registry 订单查询失败 (HTTP ${orderRes.status})。`);
+  }
+
+  const orderData = (await orderRes.json()) as {
+    state: string;
+    license?: { licenseKey: string } | null;
+  };
+
+  if (orderData.state !== "PAID" || !orderData.license?.licenseKey) {
+    return { success: false, pending: true };
+  }
+
+  const result = await purchaseAndIssueLicense({
+    slug: plugin.slug,
+    licenseKey: orderData.license.licenseKey,
+    version: plugin.version,
+    instanceId,
+    merchantId: session.merchantUser.merchantId,
+    purchasedBy: session.merchantUser.merchant.code,
+    orderReference: input.registryOrderId,
+    markPluginPurchased: false,
+  });
+
+  if (!result.success) {
+    throw new Error(`许可证验证失败: ${result.reason} — ${result.message}`);
+  }
+
+  revalidateMerchantPaths();
+  return { success: true };
+}
+
+export async function uninstallMerchantMarketplacePluginAction(formData: FormData) {
+  const session = await requireMerchantPermission("channel:write");
+  const redirectTo = getRedirectTo(formData, "/merchant/plugins");
+
+  try {
+    const slug = getRequiredString(formData, "slug", "插件标识");
+    const plugin = await uninstallMerchantMarketplacePlugin({
+      merchantId: session.merchantUser.merchantId,
+      slug,
+    });
+
+    await writeAdminAuditLog({
+      actor: getMerchantAuditActor(session),
+      action: "merchant.plugin.uninstall",
+      resourceType: "merchant_plugin",
+      resourceId: plugin.id,
+      summary: `商户 ${session.merchantUser.merchant.code} 卸载插件 ${plugin.slug}。`,
+      metadata: {
+        slug: plugin.slug,
+        channelCode: plugin.channelCode,
+        version: plugin.version,
+      },
+    });
+    revalidateMerchantPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "插件已从当前商户工作台移除。"));
 }
 
 export async function syncMerchantOrderAction(formData: FormData) {

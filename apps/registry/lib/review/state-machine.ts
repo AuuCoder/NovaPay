@@ -36,7 +36,7 @@ const TRANSITIONS: ReadonlyMap<ReviewState, ReadonlySet<ReviewState>> = new Map<
 >([
   ["DRAFT", new Set<ReviewState>(["SUBMITTED"])],
   // Developer can cancel a SUBMITTED draft; admin can claim it.
-  ["SUBMITTED", new Set<ReviewState>(["IN_REVIEW", "DRAFT"])],
+  ["SUBMITTED", new Set<ReviewState>(["IN_REVIEW", "APPROVED", "DRAFT"])],
   ["IN_REVIEW", new Set<ReviewState>(["APPROVED", "REJECTED"])],
   // Reject feedback re-opens a fresh DRAFT (Req 1.6).
   ["REJECTED", new Set<ReviewState>(["DRAFT"])],

@@ -23,6 +23,7 @@ export default async function AdminConsoleLayout({
           financeLabel: "Finance Center",
           callbacksLabel: "Callback Center",
           bindingsLabel: "Routing",
+          pluginsLabel: "Plugin Market",
           systemConfigLabel: "System Config",
           usersLabel: "Admins",
           auditLabel: "Audit Logs",
@@ -33,6 +34,7 @@ export default async function AdminConsoleLayout({
           financeDetail: "Review reconciliation summaries and ledger details",
           callbacksDetail: "Inspect merchant callback delivery and failure reasons",
           bindingsDetail: "Assign default merchant-owned channel instances by route",
+          pluginsDetail: "Manage trusted built-in payment plugins, install state, and activation status",
           systemConfigDetail: "Manage timeout, callback, and signing parameters online",
           usersDetail: "Manage administrator accounts, roles, and activation status",
           auditDetail: "Track critical back-office operations",
@@ -50,6 +52,7 @@ export default async function AdminConsoleLayout({
           financeLabel: "资金中心",
           callbacksLabel: "回调中心",
           bindingsLabel: "路由配置",
+          pluginsLabel: "插件市场",
           systemConfigLabel: "系统配置",
           usersLabel: "管理员",
           auditLabel: "审计日志",
@@ -60,6 +63,7 @@ export default async function AdminConsoleLayout({
           financeDetail: "查看对账日报与资金流水明细",
           callbacksDetail: "查看商户回调投递与失败原因",
           bindingsDetail: "指定商户默认使用哪个自有通道实例",
+          pluginsDetail: "管理受控内置支付插件的安装状态、启停状态与版本信息",
           systemConfigDetail: "在线维护超时、回调与签名参数",
           usersDetail: "管理账号、角色和启停状态",
           auditDetail: "记录后台关键操作流水",
@@ -120,6 +124,15 @@ export default async function AdminConsoleLayout({
           },
         ]
       : []),
+    ...(hasPermission(role, "plugin_marketplace:read")
+      ? [
+          {
+            href: "/admin/plugins",
+            label: content.pluginsLabel,
+            detail: content.pluginsDetail,
+          },
+        ]
+      : []),
     ...(hasPermission(role, "system_config:read")
       ? [
           {
@@ -155,16 +168,16 @@ export default async function AdminConsoleLayout({
   ];
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-4 py-4 sm:px-6 lg:px-8">
-      <div className="grid min-h-[calc(100vh-2rem)] gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="rounded-[2rem] border border-line bg-[#1f1812] p-6 text-[#f8efe6] shadow-[0_22px_80px_rgba(20,15,10,0.26)]">
+    <main className="flex min-h-screen w-full flex-col px-2 py-2 sm:px-3 sm:py-3 lg:px-4 lg:py-4">
+      <div className="grid min-h-[calc(100vh-1rem)] gap-2 sm:min-h-[calc(100vh-1.5rem)] sm:gap-3 lg:min-h-[calc(100vh-2rem)] lg:grid-cols-[248px_minmax(0,1fr)]">
+        <aside className="rounded-[1.75rem] border border-line bg-[#1f1812] p-5 text-[#f8efe6] shadow-[0_22px_80px_rgba(20,15,10,0.26)]">
           <Link href="/" className="inline-flex items-center rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.28em] text-[#dac7b3]">
             NovaPay
           </Link>
-          <h1 className="mt-5 text-3xl font-semibold">{content.title}</h1>
-          <p className="mt-3 text-sm leading-7 text-[#e9dccd]">{content.intro}</p>
+          <h1 className="mt-4 text-2xl font-semibold">{content.title}</h1>
+          <p className="mt-3 text-sm leading-6 text-[#e9dccd]">{content.intro}</p>
 
-          <div className="mt-6 rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+          <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-white/5 p-4">
             <p className="text-sm font-medium text-white">{session.adminUser.name}</p>
             <p className="mt-1 text-xs text-[#dac7b3]">{session.adminUser.email}</p>
             <p className="mt-2 inline-flex rounded-full border border-white/10 px-3 py-1 text-xs text-[#f3dfcb]">
@@ -172,11 +185,11 @@ export default async function AdminConsoleLayout({
             </p>
           </div>
 
-          <div className="mt-8">
+          <div className="mt-6">
             <AdminNav items={navItems} />
           </div>
 
-          <div className="mt-8 flex flex-wrap gap-3">
+          <div className="mt-6 flex flex-wrap gap-3">
             <Link
               href="/docs"
               className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white"
@@ -194,7 +207,7 @@ export default async function AdminConsoleLayout({
           </div>
         </aside>
 
-        <div className="rounded-[2rem] border border-line bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(255,248,240,0.82))] p-5 shadow-[var(--shadow)] sm:p-6 lg:p-8">
+        <div className="rounded-[1.5rem] border border-line bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(255,248,240,0.82))] p-4 shadow-[var(--shadow)] sm:p-5 lg:p-6">
           {children}
         </div>
       </div>

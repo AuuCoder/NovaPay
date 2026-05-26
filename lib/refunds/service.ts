@@ -7,7 +7,7 @@ import {
   getMerchantPaymentOrderByReference,
   syncPaymentOrderFromProvider,
 } from "@/lib/orders/service";
-import { getPaymentProvider } from "@/lib/payments/registry";
+import { getInstalledPaymentProvider } from "@/lib/payments/registry";
 import { getPaymentRuntimeAccountBySelection } from "@/lib/payments/provider-accounts";
 import { isRecord } from "@/lib/payments/utils";
 import { getPrismaClient } from "@/lib/prisma";
@@ -209,7 +209,7 @@ async function applyPaymentRefundNotificationById(
 }
 
 export async function syncPaymentRefundFromProvider(refund: MerchantPaymentRefund) {
-  const provider = getPaymentProvider(refund.paymentOrder.channelCode);
+  const provider = await getInstalledPaymentProvider(refund.paymentOrder.channelCode);
 
   if (!provider?.queryRefund) {
     return refund;
@@ -336,7 +336,7 @@ export async function createMerchantPaymentRefund(input: CreateMerchantPaymentRe
   const availableAmount = toAmountNumber(order.amount) - reservedAmount;
   assertRefundAmount(input.amount, availableAmount);
 
-  const provider = getPaymentProvider(order.channelCode);
+  const provider = await getInstalledPaymentProvider(order.channelCode);
 
   if (!provider?.createRefund) {
     throw new AppError(

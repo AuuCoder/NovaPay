@@ -6,7 +6,6 @@ import {
   createVerify,
   randomBytes,
 } from "node:crypto";
-import { buildMerchantChannelCallbackUrl } from "@/lib/merchant-channel-accounts";
 import { isRecord, normalizePem } from "@/lib/payments/utils";
 import type {
   CreatePaymentInput,
@@ -32,7 +31,7 @@ interface WxpayConfig {
   mchSerialNo: string;
   privateKey: string;
   apiV3Key: string;
-  notifyUrl: string;
+  notifyUrl: string | null;
   platformPublicKey: string;
   platformSerial?: string;
   apiBaseUrl: string;
@@ -137,14 +136,11 @@ function resolveNotifyUrl(
   account: ProviderAccountConfig | null | undefined,
   inputNotifyUrl?: string | null,
 ) {
-  const notifyUrl =
-    inputNotifyUrl ??
-    (account?.callbackToken
-      ? buildMerchantChannelCallbackUrl(account.channelCode, account.id, account.callbackToken)
-      : null);
+  void account;
+  const notifyUrl = inputNotifyUrl;
 
   if (!notifyUrl) {
-    throw new Error("Merchant callback route is missing for WeChat Pay channel instance.");
+    return null;
   }
 
   return new URL(notifyUrl).toString();
@@ -500,6 +496,10 @@ async function createNativeOrder(
 ): Promise<CreatePaymentResult> {
   assertOutTradeNo(input.orderId);
 
+  if (!config.notifyUrl) {
+    throw new Error("Merchant callback route is missing for WeChat Pay channel instance.");
+  }
+
   const payload = {
     appid: config.appId,
     mchid: config.mchId,
@@ -708,6 +708,10 @@ async function createWxpayRefund(
 ): Promise<PaymentRefundNotification> {
   assertOutTradeNo(input.orderId);
   assertOutRefundNo(input.refundId);
+
+  if (!config.notifyUrl) {
+    throw new Error("Merchant callback route is missing for WeChat Pay channel instance.");
+  }
 
   const payload = {
     ...(input.gatewayOrderId

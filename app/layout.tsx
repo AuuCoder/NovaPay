@@ -28,8 +28,14 @@ export default async function RootLayout({
   const locale = await getCurrentLocale();
 
   return (
-    <html lang={locale === "en" ? "en" : "zh-CN"}>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+    <html
+      lang={locale === "en" ? "en" : "zh-CN"}
+      suppressHydrationWarning
+    >
+      <body
+        suppressHydrationWarning
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
         <RuntimeErrorGuard />
         <LanguageSwitcher locale={locale} />
         {children}

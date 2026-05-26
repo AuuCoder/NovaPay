@@ -1,189 +1,445 @@
 import Link from "next/link";
+import { getCurrentLocale } from "@/lib/i18n-server";
+import { requireRegistryUserSession } from "../../../lib/auth/session";
+import {
+  canDeveloperManagePlugin,
+  listPluginOwnerships,
+} from "../../../lib/developer/plugin-ownership";
+import {
+  getRegistryRuntime,
+  listPluginVersionRecords,
+  listPluginVersionTestSessions,
+} from "../../../lib/runtime/state";
+import { isOfficialPluginSlug } from "../../../lib/plugins/official";
+import { summarizeVerificationSession } from "../../(admin)/verification-summary";
 
-interface PluginRow {
-  slug: string;
-  displayName: string;
-  vendor: string;
-  description: string;
-  version: string;
-  reviewState: "DRAFT" | "SUBMITTED" | "IN_REVIEW" | "APPROVED" | "PUBLISHED" | "REJECTED";
-  pricingMode: "FREE" | "PAID";
-  priceLabel?: string;
-  capabilities: string[];
-  installs: number;
-  updatedAt: string;
-  iconLetter: string;
+const PAGE_SIZE = 12;
+
+function buildPageHref(input: {
+  filter: string;
+  q: string;
+  sort: string;
+  page: number;
+}) {
+  const params = new URLSearchParams();
+
+  if (input.filter && input.filter !== "all") {
+    params.set("filter", input.filter);
+  }
+  if (input.q.trim()) {
+    params.set("q", input.q.trim());
+  }
+  if (input.sort && input.sort !== "plugin_asc") {
+    params.set("sort", input.sort);
+  }
+  if (input.page > 1) {
+    params.set("page", String(input.page));
+  }
+
+  const query = params.toString();
+  return query ? `/developer/plugins?${query}` : "/developer/plugins";
 }
 
-const plugins: PluginRow[] = [
-  {
-    slug: "remote.demo-runnable-crypto",
-    displayName: "Remote Demo Runnable",
-    vendor: "NovaPay Demo Team",
-    description: "Reference plugin used to validate end-to-end signed registry sync, install, and runtime loading.",
-    version: "0.1.0",
-    reviewState: "PUBLISHED",
-    pricingMode: "FREE",
-    capabilities: ["native_qr", "return_url", "order_close"],
-    installs: 23,
-    updatedAt: "2 hours ago",
-    iconLetter: "R",
-  },
-  {
-    slug: "remote.demo-paid-crypto",
-    displayName: "Remote Demo Paid",
-    vendor: "NovaPay Demo Team",
-    description: "Paid runnable example covering license issuance, payout settlement, and merchant scope binding.",
-    version: "0.2.0",
-    reviewState: "PUBLISHED",
-    pricingMode: "PAID",
-    priceLabel: "¥99 / instance",
-    capabilities: ["native_qr", "return_url", "order_close", "refund"],
-    installs: 7,
-    updatedAt: "yesterday",
-    iconLetter: "P",
-  },
-  {
-    slug: "remote.alipay-pro",
-    displayName: "Alipay Pro",
-    vendor: "Indie Studio",
-    description: "Premium Alipay channel with advanced quoting, RSA2 signing, and merchant-facing reconciliation.",
-    version: "1.4.0",
-    reviewState: "IN_REVIEW",
-    pricingMode: "PAID",
-    priceLabel: "¥299 / mo",
-    capabilities: ["page_redirect", "notify_callback", "rsa2_signature", "refund_query"],
-    installs: 0,
-    updatedAt: "3 days ago",
-    iconLetter: "A",
-  },
-];
+function getReviewBadge(reviewState: string) {
+  switch (reviewState) {
+    case "PUBLISHED":
+      return "badge badge-positive";
+    case "SUBMITTED":
+      return "badge badge-warning";
+    case "APPROVED":
+      return "badge badge-ink";
+    case "REJECTED":
+      return "badge badge-negative";
+    default:
+      return "badge badge-neutral";
+  }
+}
 
-const stateBadge: Record<PluginRow["reviewState"], string> = {
-  DRAFT: "badge-neutral",
-  SUBMITTED: "badge-warning",
-  IN_REVIEW: "badge-warning",
-  APPROVED: "badge-positive",
-  PUBLISHED: "badge-positive",
-  REJECTED: "badge-negative",
-};
+function getReviewLabel(reviewState: string, locale: "zh" | "en") {
+  const labels: Record<string, { zh: string; en: string }> = {
+    PUBLISHED: { zh: "已发布", en: "Published" },
+    SUBMITTED: { zh: "已提交", en: "Submitted" },
+    APPROVED: { zh: "已批准", en: "Approved" },
+    REJECTED: { zh: "已拒绝", en: "Rejected" },
+    DRAFT: { zh: "草稿", en: "Draft" },
+  };
 
-export default function DeveloperPluginsPage() {
-  const totalInstalls = plugins.reduce((acc, p) => acc + p.installs, 0);
-  const published = plugins.filter((p) => p.reviewState === "PUBLISHED").length;
-  const inReview = plugins.filter((p) => p.reviewState === "IN_REVIEW" || p.reviewState === "SUBMITTED").length;
+  return labels[reviewState]?.[locale] ?? reviewState;
+}
+
+function getVerificationLabel(status: string, locale: "zh" | "en") {
+  const labels: Record<string, { zh: string; en: string }> = {
+    PASSED: { zh: "已通过", en: "Passed" },
+    FAILED: { zh: "失败", en: "Failed" },
+    NO_TEST: { zh: "未自测", en: "No test" },
+    MISSING_PROFILE: { zh: "缺少验证配置", en: "Missing profile" },
+    EXEMPT: { zh: "官方豁免", en: "Exempt" },
+    UNKNOWN: { zh: "未知", en: "Unknown" },
+  };
+
+  return labels[status]?.[locale] ?? status;
+}
+
+function getVerificationBadge(status: string) {
+  switch (status) {
+    case "PASSED":
+    case "EXEMPT":
+      return "badge badge-positive";
+    case "FAILED":
+    case "MISSING_PROFILE":
+      return "badge badge-negative";
+    case "NO_TEST":
+      return "badge badge-warning";
+    default:
+      return "badge badge-neutral";
+  }
+}
+
+export default async function DeveloperPluginsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const session = await requireRegistryUserSession();
+  const locale = await getCurrentLocale();
+  const state = await getRegistryRuntime();
+  const ownerships = listPluginOwnerships();
+  const developerId = session.actorKind === "DEVELOPER" ? session.actorId : null;
+  const params = (await searchParams) ?? {};
+
+  const filter =
+    typeof params.filter === "string"
+      ? params.filter
+      : Array.isArray(params.filter)
+        ? params.filter[0] ?? "all"
+        : "all";
+  const keywordValue =
+    typeof params.q === "string"
+      ? params.q
+      : Array.isArray(params.q)
+        ? params.q[0] ?? ""
+        : "";
+  const sort =
+    typeof params.sort === "string"
+      ? params.sort
+      : Array.isArray(params.sort)
+        ? params.sort[0] ?? "plugin_asc"
+        : "plugin_asc";
+  const pageValue =
+    typeof params.page === "string"
+      ? params.page
+      : Array.isArray(params.page)
+        ? params.page[0] ?? "1"
+        : "1";
+  const currentPage = Math.max(1, Number.parseInt(pageValue, 10) || 1);
+  const keyword = keywordValue.trim().toLowerCase();
+
+  const ownershipCount = ownerships.filter((item) => item.developerId === developerId).length;
+  const rows = state.catalog.map((plugin) => {
+    const mine = canDeveloperManagePlugin(plugin.slug, developerId);
+    const versions = listPluginVersionRecords(state, plugin.slug);
+    const currentVersionRecord = versions.find((record) => record.version === plugin.version) ?? versions[0] ?? null;
+    const latestSession = summarizeVerificationSession({
+      session:
+        listPluginVersionTestSessions({
+          state,
+          pluginSlug: plugin.slug,
+          version: plugin.version,
+        })[0] ?? null,
+      manifest: state.demoBundles.get(`${plugin.slug}@${plugin.version}`)?.pipelineResult.manifest ?? null,
+      officialPlugin: isOfficialPluginSlug(plugin.slug),
+    });
+
+    return {
+      plugin,
+      mine,
+      currentVersionRecord,
+      latestSession,
+    };
+  });
+
+  const filteredRows = rows.filter(({ plugin, mine }) => {
+    const matchesFilter =
+      filter === "mine" ? mine : filter === "paid" ? plugin.pricingMode === "PAID" : true;
+
+    if (!matchesFilter) {
+      return false;
+    }
+
+    if (!keyword) {
+      return true;
+    }
+
+    return [plugin.displayName, plugin.slug, plugin.vendor, plugin.description]
+      .join(" ")
+      .toLowerCase()
+      .includes(keyword);
+  });
+
+  const sortedRows = [...filteredRows].sort((left, right) => {
+    const leftMine = left.mine;
+    const rightMine = right.mine;
+
+    switch (sort) {
+      case "owner_desc":
+        return Number(rightMine) - Number(leftMine) || left.plugin.displayName.localeCompare(right.plugin.displayName);
+      case "review_desc":
+        return (right.currentVersionRecord?.reviewState ?? "").localeCompare(left.currentVersionRecord?.reviewState ?? "") || left.plugin.displayName.localeCompare(right.plugin.displayName);
+      case "version_desc":
+        return right.plugin.version.localeCompare(left.plugin.version) || left.plugin.displayName.localeCompare(right.plugin.displayName);
+      case "plugin_asc":
+      default:
+        return left.plugin.displayName.localeCompare(right.plugin.displayName);
+    }
+  });
+
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pagedRows = sortedRows.slice(
+    (safeCurrentPage - 1) * PAGE_SIZE,
+    safeCurrentPage * PAGE_SIZE,
+  );
+
+  const content =
+    locale === "en"
+      ? {
+          eyebrow: "Developer",
+          title: "Plugins",
+          subtitle:
+            "Manage owned slugs and inspect the public registry catalog through a compact operational table.",
+          uploadBundle: "New Plugin",
+          stats: {
+            published: "Published",
+            owned: "Owned",
+            paid: "Paid",
+          },
+          filters: {
+            all: "All",
+            mine: "Mine",
+            paid: "Paid",
+          },
+          searchPlaceholder: "Search plugins",
+          search: "Search",
+          sortLabel: "Sort",
+          sortOptions: {
+            plugin_asc: "Name",
+            owner_desc: "Owned first",
+            review_desc: "Review",
+            version_desc: "Latest version",
+          },
+          headers: {
+            plugin: "Plugin",
+            ownership: "Ownership",
+            review: "Review",
+            verification: "Self-test",
+            version: "Version",
+            channel: "Channel",
+            action: "Action",
+          },
+          ownershipMine: "Owned",
+          ownershipPublic: "Read-only",
+          unknown: "Unknown",
+          manage: "Manage",
+          browse: "Open",
+          prev: "Prev",
+          next: "Next",
+          page: "Page",
+        }
+      : {
+          eyebrow: "开发者",
+          title: "插件",
+          subtitle: "用一张更克制的运营表统一管理自己的 slug，并查看公开目录。",
+          uploadBundle: "新建插件",
+          stats: {
+            published: "已发布",
+            owned: "我的",
+            paid: "收费",
+          },
+          filters: {
+            all: "全部",
+            mine: "我的",
+            paid: "收费",
+          },
+          searchPlaceholder: "搜索插件",
+          search: "搜索",
+          sortLabel: "排序",
+          sortOptions: {
+            plugin_asc: "名称",
+            owner_desc: "我的优先",
+            review_desc: "审核状态",
+            version_desc: "最新版本",
+          },
+          headers: {
+            plugin: "插件",
+            ownership: "归属",
+            review: "审核",
+            verification: "自测",
+            version: "版本",
+            channel: "通道",
+            action: "操作",
+          },
+          ownershipMine: "我的",
+          ownershipPublic: "只读",
+          unknown: "未知",
+          manage: "管理",
+          browse: "打开",
+          prev: "上一页",
+          next: "下一页",
+          page: "第",
+        };
 
   return (
-    <>
-      <section className="hero-band">
-        <div className="container">
-          <p className="text-eyebrow">Plugin workspace</p>
-          <div className="flex-between" style={{ alignItems: "flex-end", marginTop: 12 }}>
-            <div style={{ flex: 1, minWidth: 280 }}>
-              <h1 className="text-display-lg">Your plugins</h1>
-              <p className="text-lead" style={{ marginTop: 12, maxWidth: 640 }}>
-                Manage plugin records, ship versions through the review workflow, and watch
-                merchant adoption from a single dashboard.
-              </p>
-            </div>
-            <div style={{ display: "flex", gap: 12 }}>
-              <Link href="/developer/plugins/import" className="btn btn-tertiary">Import manifest</Link>
-              <Link href="/developer/plugins/new" className="btn btn-primary">Create plugin</Link>
-            </div>
+    <section className="admin-shell">
+      <div className="container admin-page">
+        <div className="admin-header">
+          <div className="admin-header-copy">
+            <p className="text-eyebrow">{content.eyebrow}</p>
+            <h1 className="admin-title">{content.title}</h1>
+            <p className="admin-subtitle">{content.subtitle}</p>
           </div>
-
-          <div className="grid-3" style={{ marginTop: 40 }}>
-            <div className="stat-card feature">
-              <p className="stat-label">Published</p>
-              <p className="stat-value">{published}</p>
-              <p className="stat-delta">+1 this week</p>
-            </div>
-            <div className="stat-card">
-              <p className="stat-label">In review</p>
-              <p className="stat-value">{inReview}</p>
-              <p className="text-body-sm text-mute">awaiting registry approval</p>
-            </div>
-            <div className="stat-card">
-              <p className="stat-label">Total installs</p>
-              <p className="stat-value">{totalInstalls}</p>
-              <p className="text-body-sm text-mute">across NovaPay instances</p>
-            </div>
+          <div className="admin-toolbar">
+            <Link href="/developer/plugins/new" className="btn btn-primary">
+              {content.uploadBundle}
+            </Link>
           </div>
         </div>
-      </section>
 
-      <section className="content-band">
-        <div className="container">
-          <div className="flex-between" style={{ marginBottom: 24 }}>
-            <h2 className="text-display-sm">All plugins</h2>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="pill">All</button>
-              <button className="pill">Published</button>
-              <button className="pill">In review</button>
-              <button className="pill">Drafts</button>
-            </div>
+        <div className="grid-3">
+          <div className="stat-card feature">
+            <p className="stat-label">{content.stats.published}</p>
+            <p className="stat-value">{sortedRows.length}</p>
           </div>
+          <div className="stat-card">
+            <p className="stat-label">{content.stats.owned}</p>
+            <p className="stat-value">{ownershipCount}</p>
+          </div>
+          <div className="stat-card">
+            <p className="stat-label">{content.stats.paid}</p>
+            <p className="stat-value">{rows.filter((row) => row.plugin.pricingMode === "PAID").length}</p>
+          </div>
+        </div>
 
-          <div className="grid-2">
-            {plugins.map((plugin) => (
-              <Link
-                key={plugin.slug}
-                href={`/developer/plugins/${plugin.slug}`}
-                className="plugin-card"
-              >
-                <div className="plugin-card-head">
-                  <div style={{ display: "flex", gap: 16, alignItems: "flex-start", minWidth: 0 }}>
-                    <div className="plugin-card-icon">{plugin.iconLetter}</div>
-                    <div className="plugin-card-meta">
-                      <p className="plugin-card-title">{plugin.displayName}</p>
-                      <p className="plugin-card-slug">{plugin.slug}</p>
-                      <p className="text-body-sm text-mute">by {plugin.vendor}</p>
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                    <span className={`badge ${stateBadge[plugin.reviewState]}`}>{plugin.reviewState}</span>
-                    <span className={`badge ${plugin.pricingMode === "PAID" ? "badge-ink" : "badge-neutral"}`}>
-                      {plugin.pricingMode === "PAID" ? plugin.priceLabel ?? "Paid" : "Free"}
-                    </span>
-                  </div>
-                </div>
-
-                <p className="plugin-card-body">{plugin.description}</p>
-
-                <div className="pill-row">
-                  {plugin.capabilities.map((cap) => (
-                    <span key={cap} className="pill" style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                      {cap}
-                    </span>
-                  ))}
-                </div>
-
-                <div className="plugin-card-footer">
-                  <span className="text-caption">v{plugin.version}</span>
-                  <span className="text-caption">·</span>
-                  <span className="text-caption">{plugin.installs} installs</span>
-                  <span className="text-caption">·</span>
-                  <span className="text-caption">Updated {plugin.updatedAt}</span>
-                  <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600, color: "var(--color-positive-deep)" }}>
-                    Manage →
-                  </span>
-                </div>
+        <div className="enterprise-panel">
+          <div className="admin-header" style={{ marginBottom: 12 }}>
+            <div className="console-filterbar">
+              <Link href={buildPageHref({ filter: "all", q: keywordValue, sort, page: 1 })} className={filter === "all" ? "btn btn-primary btn-sm" : "btn btn-tertiary btn-sm"}>
+                {content.filters.all}
               </Link>
-            ))}
+              <Link href={buildPageHref({ filter: "mine", q: keywordValue, sort, page: 1 })} className={filter === "mine" ? "btn btn-primary btn-sm" : "btn btn-tertiary btn-sm"}>
+                {content.filters.mine}
+              </Link>
+              <Link href={buildPageHref({ filter: "paid", q: keywordValue, sort, page: 1 })} className={filter === "paid" ? "btn btn-primary btn-sm" : "btn btn-tertiary btn-sm"}>
+                {content.filters.paid}
+              </Link>
+            </div>
+            <form action="/developer/plugins" className="console-filterbar">
+              <input type="hidden" name="filter" value={filter} />
+              <input
+                type="search"
+                name="q"
+                defaultValue={keywordValue}
+                className="input console-search"
+                placeholder={content.searchPlaceholder}
+              />
+              <select name="sort" defaultValue={sort} className="input" style={{ minWidth: 160 }}>
+                <option value="plugin_asc">{content.sortLabel}: {content.sortOptions.plugin_asc}</option>
+                <option value="owner_desc">{content.sortLabel}: {content.sortOptions.owner_desc}</option>
+                <option value="review_desc">{content.sortLabel}: {content.sortOptions.review_desc}</option>
+                <option value="version_desc">{content.sortLabel}: {content.sortOptions.version_desc}</option>
+              </select>
+              <button type="submit" className="btn btn-tertiary btn-sm">
+                {content.search}
+              </button>
+            </form>
           </div>
 
-          <div className="cta-block" style={{ marginTop: 64 }}>
-            <div className="cta-text">
-              <p className="text-eyebrow" style={{ color: "var(--color-primary)" }}>Need to upload?</p>
-              <h3 className="text-display-sm">Drop a signed bundle, get a verified release.</h3>
-              <p className="text-body-md" style={{ marginTop: 8 }}>
-                Upload a tar.gz / zip up to 50 MB and the registry handles checksum, signing, and review queueing.
-              </p>
+          <div style={{ overflowX: "auto" }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th><Link href={buildPageHref({ filter, q: keywordValue, sort: "plugin_asc", page: 1 })}>{content.headers.plugin}</Link></th>
+                  <th><Link href={buildPageHref({ filter, q: keywordValue, sort: "owner_desc", page: 1 })}>{content.headers.ownership}</Link></th>
+                  <th><Link href={buildPageHref({ filter, q: keywordValue, sort: "review_desc", page: 1 })}>{content.headers.review}</Link></th>
+                  <th>{content.headers.verification}</th>
+                  <th><Link href={buildPageHref({ filter, q: keywordValue, sort: "version_desc", page: 1 })}>{content.headers.version}</Link></th>
+                  <th>{content.headers.channel}</th>
+                  <th style={{ textAlign: "right" }}>{content.headers.action}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pagedRows.map(({ plugin, mine, currentVersionRecord, latestSession }) => (
+                  <tr key={plugin.slug}>
+                    <td>
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <p className="text-body-md-strong">{plugin.displayName}</p>
+                        <p className="text-caption" style={{ fontFamily: "ui-monospace, monospace" }}>
+                          {plugin.slug}
+                        </p>
+                        <p className="text-body-sm text-body-color">{plugin.vendor}</p>
+                      </div>
+                    </td>
+                    <td>
+                      <span className={mine ? "badge badge-positive" : "badge badge-neutral"}>
+                        {mine ? content.ownershipMine : content.ownershipPublic}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={getReviewBadge(currentVersionRecord?.reviewState ?? "UNKNOWN")}>
+                        {getReviewLabel(currentVersionRecord?.reviewState ?? "UNKNOWN", locale)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={getVerificationBadge(latestSession?.status ?? "UNKNOWN")}>
+                        {getVerificationLabel(latestSession?.status ?? "UNKNOWN", locale)}
+                      </span>
+                    </td>
+                    <td className="text-body-sm text-body-color">v{plugin.version}</td>
+                    <td className="text-body-sm text-body-color">{plugin.channelCode}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <Link
+                        href={`/developer/plugins/${plugin.slug}`}
+                        className={mine ? "btn btn-primary btn-sm" : "btn btn-tertiary btn-sm"}
+                      >
+                        {mine ? content.manage : content.browse}
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="admin-header" style={{ marginTop: 16 }}>
+            <p className="text-body-sm text-mute">
+              {content.page} {safeCurrentPage} / {totalPages}
+            </p>
+            <div className="admin-toolbar">
+              <Link
+                href={buildPageHref({
+                  filter,
+                  q: keywordValue,
+                  sort,
+                  page: Math.max(1, safeCurrentPage - 1),
+                })}
+                className="btn btn-tertiary btn-sm"
+              >
+                {content.prev}
+              </Link>
+              <Link
+                href={buildPageHref({
+                  filter,
+                  q: keywordValue,
+                  sort,
+                  page: Math.min(totalPages, safeCurrentPage + 1),
+                })}
+                className="btn btn-tertiary btn-sm"
+              >
+                {content.next}
+              </Link>
             </div>
-            <Link href="/developer/plugins/new" className="btn btn-primary">Upload bundle</Link>
           </div>
         </div>
-      </section>
-    </>
+      </div>
+    </section>
   );
 }

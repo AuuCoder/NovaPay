@@ -9,11 +9,14 @@ import {
   isUsdtPaymentChannelCode,
   normalizePaymentChannelCode,
 } from "@/lib/payments/channel-codes";
-import { getPaymentProvider } from "@/lib/payments/registry";
+import {
+  getInstalledPaymentProvider,
+} from "@/lib/payments/registry";
 import {
   getPaymentRuntimeAccountBySelection,
   selectProviderAccountForOrder,
 } from "@/lib/payments/provider-accounts";
+import { isMerchantPaymentPluginInstalled } from "@/lib/plugins/marketplace";
 import { getPrismaClient } from "@/lib/prisma";
 import type { PaymentNotification } from "@/lib/payments/types";
 import {
@@ -285,7 +288,7 @@ export async function expirePaymentOrderIfNeeded(
   }
 
   let currentOrder = order;
-  const provider = getPaymentProvider(currentOrder.channelCode);
+  const provider = await getInstalledPaymentProvider(currentOrder.channelCode);
 
   if (provider?.queryPayment) {
     try {
@@ -425,7 +428,7 @@ export async function getMerchantPaymentOrderByReference(input: {
 }
 
 export async function syncPaymentOrderFromProvider(order: MerchantPaymentOrder) {
-  const provider = getPaymentProvider(order.channelCode);
+  const provider = await getInstalledPaymentProvider(order.channelCode);
 
   if (!provider?.queryPayment) {
     return order;
@@ -479,7 +482,7 @@ export async function closeMerchantPaymentOrder(input: {
     return order;
   }
 
-  const provider = getPaymentProvider(order.channelCode);
+  const provider = await getInstalledPaymentProvider(order.channelCode);
 
   if (!provider?.closePayment) {
     throw new AppError(
@@ -503,7 +506,7 @@ export async function closeMerchantPaymentOrder(input: {
 export async function createPaymentOrder(input: CreatePaymentOrderInput) {
   const prisma = getPrismaClient();
   const normalizedChannelCode = normalizePaymentChannelCode(input.channelCode);
-  const provider = getPaymentProvider(normalizedChannelCode);
+  const provider = await getInstalledPaymentProvider(normalizedChannelCode);
 
   if (!provider) {
     throw new AppError(
@@ -524,6 +527,19 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
       "MERCHANT_NOT_FOUND",
       `Merchant ${input.merchantCode} was not found.`,
       404,
+    );
+  }
+
+  const pluginInstalled = await isMerchantPaymentPluginInstalled(
+    merchant.id,
+    normalizedChannelCode,
+  );
+
+  if (!pluginInstalled) {
+    throw new AppError(
+      "PLUGIN_NOT_INSTALLED",
+      `Channel ${normalizedChannelCode} is not installed for merchant ${merchant.code}. Install the payment plugin first.`,
+      422,
     );
   }
 

@@ -16,6 +16,10 @@
  *     content drift loudly.
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+
 export interface ObjectStorePutInput {
   /** Object key, e.g. `packages/<sha256>.tar.gz`. Must not start with `/`. */
   key: string;
@@ -48,6 +52,7 @@ export interface ObjectStorePresignDownloadResult {
 export interface ObjectStoreClient {
   put(input: ObjectStorePutInput): Promise<ObjectStorePutResult>;
   exists(key: string): Promise<boolean>;
+  get?(key: string): Promise<{ body: Buffer; contentType: string; contentLength: number } | null>;
   presignDownload(
     input: ObjectStorePresignDownloadInput,
   ): Promise<ObjectStorePresignDownloadResult>;
@@ -110,6 +115,14 @@ interface InMemoryObject {
   createdAt: Date;
 }
 
+interface FileStoreObject {
+  bodyBase64: string;
+  contentType: string;
+  sha256: string;
+  storedSizeBytes: number;
+  createdAt: string;
+}
+
 interface InMemoryStoreOptions {
   publicBaseUrl?: string;
   defaultDownloadExpiresInSeconds?: number;
@@ -168,10 +181,131 @@ export function createInMemoryObjectStore(
       sanitizeKey(key);
       return objects.has(key);
     },
+    async get(key: string) {
+      sanitizeKey(key);
+      const object = objects.get(key);
+      if (!object) return null;
+      return {
+        body: Buffer.from(object.body),
+        contentType: object.contentType,
+        contentLength: object.storedSizeBytes,
+      };
+    },
 
     async presignDownload(
       input: ObjectStorePresignDownloadInput,
     ): Promise<ObjectStorePresignDownloadResult> {
+      sanitizeKey(input.key);
+      const expiresInSeconds = input.expiresInSeconds ?? defaultExpiry;
+      if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
+        throw new Error("expiresInSeconds must be a positive finite number.");
+      }
+      const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+      const expiresUnix = Math.floor(expiresAt.getTime() / 1000);
+      const url = `${baseUrl.replace(/\/$/, "")}/${input.key}?expires=${expiresUnix}`;
+      return {
+        url,
+        expiresAt,
+        key: input.key,
+      };
+    },
+  };
+}
+
+interface FileObjectStoreOptions {
+  rootDir: string;
+  publicBaseUrl?: string;
+  defaultDownloadExpiresInSeconds?: number;
+}
+
+function encodeFileObjectPath(rootDir: string, key: string) {
+  const fileName = Buffer.from(key, "utf8").toString("base64url") + ".json";
+  return path.join(rootDir, fileName);
+}
+
+function computeSha256Hex(body: Buffer) {
+  return createHash("sha256").update(body).digest("hex");
+}
+
+export function createFileObjectStore(
+  options: FileObjectStoreOptions,
+): ObjectStoreClient {
+  const baseUrl = options.publicBaseUrl ?? "http://file-object-store.local";
+  const defaultExpiry =
+    options.defaultDownloadExpiresInSeconds ??
+    DEFAULT_DOWNLOAD_PRESIGN_EXPIRES_IN_SECONDS;
+
+  return {
+    async put(input) {
+      sanitizeKey(input.key);
+      const body = toBuffer(input.body);
+
+      if (body.length !== input.contentLength) {
+        throw new Error(
+          `Object store contentLength mismatch: declared ${input.contentLength}, actual ${body.length}.`,
+        );
+      }
+
+      const sha256 = computeSha256Hex(body);
+      if (sha256 !== input.sha256) {
+        throw new Error(
+          `Object store sha256 mismatch: declared ${input.sha256}, actual ${sha256}.`,
+        );
+      }
+
+      const filePath = encodeFileObjectPath(options.rootDir, input.key);
+      if (existsSync(filePath)) {
+        const existing = JSON.parse(readFileSync(filePath, "utf8")) as FileStoreObject;
+        if (existing.sha256 !== input.sha256) {
+          throw new Error(
+            `Object store conflict: key already exists with different content (${input.key}).`,
+          );
+        }
+        return {
+          key: input.key,
+          alreadyExisted: true,
+          storedSizeBytes: existing.storedSizeBytes,
+        };
+      }
+
+      mkdirSync(options.rootDir, { recursive: true });
+      const payload: FileStoreObject = {
+        bodyBase64: body.toString("base64"),
+        contentType: input.contentType,
+        sha256: input.sha256,
+        storedSizeBytes: body.length,
+        createdAt: new Date().toISOString(),
+      };
+      writeFileSync(filePath, JSON.stringify(payload), "utf8");
+
+      return {
+        key: input.key,
+        alreadyExisted: false,
+        storedSizeBytes: body.length,
+      };
+    },
+
+    async exists(key) {
+      sanitizeKey(key);
+      return existsSync(encodeFileObjectPath(options.rootDir, key));
+    },
+
+    async get(key) {
+      sanitizeKey(key);
+      const filePath = encodeFileObjectPath(options.rootDir, key);
+      if (!existsSync(filePath)) {
+        return null;
+      }
+      const payload = JSON.parse(readFileSync(filePath, "utf8")) as FileStoreObject;
+      const body = Buffer.from(payload.bodyBase64, "base64");
+      return {
+        body,
+        contentType: payload.contentType,
+        contentLength: payload.storedSizeBytes,
+      };
+    },
+
+    async presignDownload(input) {
       sanitizeKey(input.key);
       const expiresInSeconds = input.expiresInSeconds ?? defaultExpiry;
       if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
@@ -205,6 +339,13 @@ export function createS3CompatibleObjectStoreClient(
 export function createObjectStoreClient(
   config: ObjectStoreConfig,
 ): ObjectStoreClient {
+  if (!process.env.OBJECT_STORE_DRIVER || process.env.OBJECT_STORE_DRIVER === "file") {
+    return createFileObjectStore({
+      rootDir: path.join(process.cwd(), ".tmp", "registry-object-store"),
+      publicBaseUrl: config.publicBaseUrl,
+      defaultDownloadExpiresInSeconds: config.defaultDownloadExpiresInSeconds,
+    });
+  }
   if (process.env.OBJECT_STORE_DRIVER === "memory") {
     return createInMemoryObjectStore({
       publicBaseUrl: config.publicBaseUrl,

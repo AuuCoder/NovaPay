@@ -254,7 +254,7 @@ The system uses **surface contrast** as the primary elevation cue (sage backgrou
 - Upload flow: stepped form inside `card-content`, progress indicator uses `--color-primary`
 - Sales dashboard: data tables with sage header rows, green accent for positive metrics
 
-### Admin Console
+### Governance Workspace
 - Review queue: table layout with status badges (SUBMITTED=neutral, APPROVED=positive, REJECTED=negative)
 - Plugin detail: split layout — metadata card left, actions card right
 - Categories: tag-style pills using `--rounded-pill` and `--color-primary-pale`

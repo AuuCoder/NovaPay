@@ -10,6 +10,8 @@ export type AdminPermission =
   | "merchant_credential:write"
   | "binding:read"
   | "binding:write"
+  | "plugin_marketplace:read"
+  | "plugin_marketplace:write"
   | "system_config:read"
   | "system_config:write"
   | "order:read"
@@ -30,6 +32,8 @@ const ALL_PERMISSIONS: AdminPermission[] = [
   "merchant_credential:write",
   "binding:read",
   "binding:write",
+  "plugin_marketplace:read",
+  "plugin_marketplace:write",
   "system_config:read",
   "system_config:write",
   "order:read",
@@ -53,6 +57,8 @@ const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
     "merchant_credential:write",
     "binding:read",
     "binding:write",
+    "plugin_marketplace:read",
+    "plugin_marketplace:write",
     "order:read",
     "order:write",
     "callback:read",
@@ -65,6 +71,7 @@ const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
     "finance:write",
     "merchant:read",
     "binding:read",
+    "plugin_marketplace:read",
     "order:read",
     "callback:read",
     "audit:read",
@@ -73,6 +80,7 @@ const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
     "dashboard:view",
     "merchant:read",
     "binding:read",
+    "plugin_marketplace:read",
     "order:read",
     "callback:read",
   ],

@@ -59,10 +59,7 @@ apps/registry/
 
 ## Relationship to the NovaPay main app
 
-This Registry replaces the development-only mock at
-`/app/api/mock-plugin-registry/**` in the NovaPay main app. The phase 1
-contract requires the Registry's `GET /registry/plugins` and
-`GET /registry/packages/:slug/:version` responses to be byte-compatible with
-the existing mock so that NovaPay only has to switch
-`PluginRegistrySource.baseUrl` to the new Registry — no code changes required
-on the consumer side.
+NovaPay consumes this Registry as its sole remote plugin marketplace.
+The main app synchronizes catalog entries from the Registry, downloads signed
+plugin bundles, and exposes approved plugins to merchants for installation and
+channel configuration.

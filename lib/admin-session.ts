@@ -16,6 +16,14 @@ function hashSessionToken(token: string) {
 }
 
 function getBootstrapAdminConfig() {
+  const bootstrapEnabled = /^(1|true|yes)$/i.test(
+    process.env.ADMIN_BOOTSTRAP_ENABLED?.trim() ?? "",
+  );
+
+  if (!bootstrapEnabled) {
+    return null;
+  }
+
   const email = process.env.ADMIN_BOOTSTRAP_EMAIL?.trim();
   const password = process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim();
 

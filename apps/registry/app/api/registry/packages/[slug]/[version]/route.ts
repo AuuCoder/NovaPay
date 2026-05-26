@@ -13,6 +13,7 @@ import {
   getRegistryRuntime,
 } from "../../../../../../lib/runtime/state";
 import { requireConsumer } from "../../../../../../lib/auth/require-consumer";
+import { apiError } from "../../../../../../lib/api/response";
 
 export const runtime = "nodejs";
 
@@ -29,10 +30,7 @@ export async function GET(
   const state = await getRegistryRuntime();
   const bundle = describeDemoBundle(state, slug, version);
   if (!bundle) {
-    return NextResponse.json(
-      { error: "BUNDLE_NOT_FOUND", message: `No bundle for ${slug}@${version}` },
-      { status: 404 },
-    );
+    return apiError(request, "BUNDLE_NOT_FOUND", 404, { slug, version });
   }
 
   const url = new URL(request.url);

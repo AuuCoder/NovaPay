@@ -8,16 +8,22 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getRegistryRuntime } from "../../../../lib/runtime/state";
 import { verifyLicense } from "../../../../lib/licensing/verifier";
+import { resolveApiMessage, resolveRequestLocale } from "../../../../lib/api/response";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
+  const locale = resolveRequestLocale(request);
   let body: Record<string, unknown> = {};
   try {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
     return NextResponse.json(
-      { valid: false, reason: "INVALID_FORMAT", message: "Request body must be JSON." },
+      {
+        valid: false,
+        reason: "INVALID_FORMAT",
+        message: resolveApiMessage(locale, "INVALID_BODY"),
+      },
       { status: 400 },
     );
   }
@@ -25,7 +31,11 @@ export async function POST(request: NextRequest) {
   const jwsCompact = typeof body.licenseKey === "string" ? body.licenseKey : null;
   if (!jwsCompact) {
     return NextResponse.json(
-      { valid: false, reason: "INVALID_FORMAT", message: "licenseKey is required." },
+      {
+        valid: false,
+        reason: "INVALID_FORMAT",
+        message: resolveApiMessage(locale, "LICENSE_KEY_REQUIRED"),
+      },
       { status: 400 },
     );
   }
@@ -50,6 +60,7 @@ export async function POST(request: NextRequest) {
     },
     state.keyStore,
     state.revocations,
+    state.licenseStore,
   );
 
   return NextResponse.json(result, {

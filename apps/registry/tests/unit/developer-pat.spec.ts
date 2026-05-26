@@ -17,6 +17,7 @@ describe("createPat", () => {
     assert.equal(result.record.name, "CI Token");
     assert.equal(result.record.status, "ACTIVE");
     assert.equal(result.record.tokenHash, hashToken(result.token));
+    assert.match(result.record.tokenPreview, /^nvreg_\*{6}[a-f0-9]{4}$/);
   });
 });
 

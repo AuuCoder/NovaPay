@@ -1,15 +1,46 @@
 import { redirect } from "next/navigation";
+import { AdminLoginForm } from "@/app/admin/admin-login-form";
 import { loginAdminAction } from "@/app/admin/actions";
 import { readPageMessages, type SearchParamsInput } from "@/app/admin/support";
-import { FlashMessage, inputClass } from "@/app/admin/ui";
+import { FlashMessage } from "@/app/admin/ui";
 import { hasAdminSession, isAdminUiConfigured } from "@/lib/admin-session";
 import { getCurrentLocale } from "@/lib/i18n-server";
+import { getMainSiteSetupStatus } from "@/lib/platform-setup";
+
+function getAdminLoginPrefill() {
+  const email = process.env.ADMIN_BOOTSTRAP_EMAIL?.trim() ?? "";
+  const password = process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim() ?? "";
+  const publicBaseUrl = process.env.NOVAPAY_PUBLIC_BASE_URL?.trim() ?? "";
+
+  const isLocalLike =
+    publicBaseUrl.includes("localhost") ||
+    publicBaseUrl.includes("127.0.0.1") ||
+    publicBaseUrl.includes("localtest.me");
+
+  if (!isLocalLike) {
+    return {
+      email: "",
+      password: "",
+    };
+  }
+
+  return {
+    email,
+    password,
+  };
+}
 
 export default async function AdminLoginPage({
   searchParams,
 }: {
   searchParams?: SearchParamsInput;
 }) {
+  const setupStatus = await getMainSiteSetupStatus();
+
+  if (!setupStatus.setupComplete) {
+    redirect("/setup");
+  }
+
   if (await hasAdminSession()) {
     redirect("/admin");
   }
@@ -17,6 +48,7 @@ export default async function AdminLoginPage({
   const messages = await readPageMessages(searchParams);
   const configured = await isAdminUiConfigured();
   const locale = await getCurrentLocale();
+  const loginPrefill = getAdminLoginPrefill();
 
   const content =
     locale === "en"
@@ -93,35 +125,17 @@ export default async function AdminLoginPage({
             />
           </div>
 
-          <form action={loginAdminAction} className="mt-6 space-y-5">
-            <label className="block space-y-2">
-              <span className="text-sm font-medium text-foreground">{content.accountLabel}</span>
-              <input
-                name="email"
-                type="text"
-                placeholder={content.accountPlaceholder}
-                className={inputClass}
-                disabled={!configured}
-              />
-            </label>
-            <label className="block space-y-2">
-              <span className="text-sm font-medium text-foreground">{content.passwordLabel}</span>
-              <input
-                name="password"
-                type="password"
-                placeholder={content.passwordPlaceholder}
-                className={inputClass}
-                disabled={!configured}
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={!configured}
-              className="inline-flex w-full items-center justify-center rounded-2xl bg-foreground px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {content.submitLabel}
-            </button>
-          </form>
+          <AdminLoginForm
+            action={loginAdminAction}
+            configured={configured}
+            emailPrefill={loginPrefill.email}
+            passwordPrefill={loginPrefill.password}
+            accountLabel={content.accountLabel}
+            passwordLabel={content.passwordLabel}
+            accountPlaceholder={content.accountPlaceholder}
+            passwordPlaceholder={content.passwordPlaceholder}
+            submitLabel={content.submitLabel}
+          />
         </div>
       </section>
     </main>

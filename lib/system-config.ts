@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { getPrismaClient } from "@/lib/prisma";
 
 const CACHE_TTL_MS = 30_000;
 const cache = new Map<string, { value: string; expiresAt: number }>();
@@ -26,6 +25,11 @@ function setCached(key: string, value: string) {
   });
 }
 
+async function loadPrismaClient() {
+  const { getPrismaClient } = await import("@/lib/prisma");
+  return getPrismaClient();
+}
+
 export function invalidateSystemConfigCache(key?: string) {
   if (key) {
     cache.delete(key);
@@ -43,7 +47,7 @@ export async function getSystemConfig(key: string) {
   }
 
   try {
-    const prisma = getPrismaClient();
+    const prisma = await loadPrismaClient();
     const row = await prisma.systemConfig.findUnique({
       where: {
         key,
@@ -68,7 +72,7 @@ export async function getSystemConfig(key: string) {
 }
 
 export async function getAllSystemConfigs() {
-  const prisma = getPrismaClient();
+  const prisma = await loadPrismaClient();
 
   return prisma.systemConfig.findMany({
     orderBy: [{ group: "asc" }, { key: "asc" }],
@@ -82,7 +86,7 @@ export async function setSystemConfigs(
     return;
   }
 
-  const prisma = getPrismaClient();
+  const prisma = await loadPrismaClient();
 
   await prisma.$transaction(
     configs.map((config) =>
@@ -146,7 +150,7 @@ interface EnsureInstanceIdPrismaLike {
 export async function ensureInstanceId(
   prisma?: EnsureInstanceIdPrismaLike,
 ): Promise<string> {
-  const client = (prisma ?? getPrismaClient()) as EnsureInstanceIdPrismaLike;
+  const client = (prisma ?? (await loadPrismaClient())) as EnsureInstanceIdPrismaLike;
 
   const existing = await client.systemConfig.findUnique({
     where: { key: SYSTEM_CONFIG_INSTANCE_ID_KEY },

@@ -55,36 +55,37 @@ export interface CallbackPayload {
 export class NovaPayClient {
   constructor(private readonly config: NovaPayClientConfig) {}
 
-  private signRequest(method: string, path: string, body: string, timestamp: string) {
-    const stringToSign = `${method}\n${path}\n${timestamp}\n${body}`;
+  private signRequest(rawBody: string, timestamp: string, nonce: string) {
     return createHmac("sha256", this.config.apiKeySecret)
-      .update(stringToSign)
+      .update(`${timestamp}.${nonce}.${rawBody}`)
       .digest("hex");
   }
 
   async createPaymentOrder(input: CreateOrderInput): Promise<CreateOrderResult> {
-    const path = "/openapi/v1/payment-orders";
+    const path = "/api/payment-orders";
     const body = JSON.stringify({
-      external_order_id: input.externalOrderId,
-      amount: input.amountCents,
-      currency: input.currency,
+      merchantCode: this.config.merchantId,
+      externalOrderId: input.externalOrderId,
+      amount: (input.amountCents / 100).toFixed(2),
+      currency: "CNY",
       subject: input.subject,
-      channel_code: input.channelCode,
-      callback_url: input.callbackUrl,
-      return_url: input.returnUrl,
+      channelCode: input.channelCode,
+      callbackUrl: input.callbackUrl,
+      returnUrl: input.returnUrl,
       metadata: input.metadata ?? {},
     });
     const timestamp = new Date().toISOString();
-    const signature = this.signRequest("POST", path, body, timestamp);
+    const nonce = `registry_${Date.now().toString(36)}`;
+    const signature = this.signRequest(body, timestamp, nonce);
 
     const response = await fetch(`${this.config.baseUrl}${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-NovaPay-Merchant-Id": this.config.merchantId,
-        "X-NovaPay-Key-Id": this.config.apiKeyId,
-        "X-NovaPay-Timestamp": timestamp,
-        "X-NovaPay-Signature": signature,
+        "x-novapay-key": this.config.apiKeyId,
+        "x-novapay-timestamp": timestamp,
+        "x-novapay-nonce": nonce,
+        "x-novapay-signature": signature,
       },
       body,
       signal: AbortSignal.timeout(15_000),
@@ -98,15 +99,17 @@ export class NovaPayClient {
     }
 
     const data = (await response.json()) as {
-      novapay_order_id: string;
-      checkout_url: string;
-      status: string;
+      order: {
+        id: string;
+        hostedCheckoutUrl: string | null;
+        status: string;
+      };
     };
 
     return {
-      novapayOrderId: data.novapay_order_id,
-      checkoutUrl: data.checkout_url,
-      status: data.status,
+      novapayOrderId: data.order.id,
+      checkoutUrl: data.order.hostedCheckoutUrl ?? `${this.config.baseUrl}/pay/${data.order.id}`,
+      status: data.order.status,
     };
   }
 
@@ -116,9 +119,10 @@ export class NovaPayClient {
    * differences.
    */
   verifyCallbackSignature(payload: Omit<CallbackPayload, "signature">, signature: string): boolean {
-    const path = "/registry/payments/callback"; // canonical path
     const body = JSON.stringify(payload);
-    const expected = this.signRequest("POST", path, body, payload.timestamp);
+    const expected = createHmac("sha256", this.config.apiKeySecret)
+      .update(`${payload.timestamp}.${body}`)
+      .digest("hex");
 
     try {
       const expectedBuf = Buffer.from(expected, "hex");

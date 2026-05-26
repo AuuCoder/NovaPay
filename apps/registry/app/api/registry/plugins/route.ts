@@ -1,10 +1,10 @@
 /**
  * GET /registry/plugins
  *
- * Returns the plugin catalog in a format byte-compatible with the NovaPay
- * mock registry (`app/api/mock-plugin-registry/registry/plugins/route.ts`).
- * New fields are placed exclusively under `metadata.*` to preserve backward
- * compatibility with `parseRemotePluginRecord` (Req 23.1, 25.2).
+ * Returns the plugin catalog in the remote marketplace format consumed by
+ * NovaPay. Structured pricing fields are now emitted alongside the legacy
+ * `priceLabel` so registries can create real paid orders instead of relying
+ * on display-only text.
  *
  * The catalog is sourced from `lib/runtime/state.ts`, which signs the demo
  * bundles at boot so the checksum/signature returned here are real and

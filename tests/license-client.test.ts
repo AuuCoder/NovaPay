@@ -39,7 +39,7 @@ test("verifyLicense returns success when registry reports valid", async () => {
           valid: true,
           claims: {
             jti: "lic-1",
-            pluginSlug: "remote.demo",
+            pluginSlug: "thirdparty.sample-pay",
             version: "0.1.0",
             pricingPlanKind: "PER_INSTANCE_ONE_TIME",
             instanceId: "inst-A",
@@ -55,7 +55,7 @@ test("verifyLicense returns success when registry reports valid", async () => {
     async (calls) => {
       const result = await verifyLicense({
         licenseKey: "header.payload.signature",
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         instanceId: "inst-A",
         registryBaseUrl: "https://registry.example.com",
@@ -64,7 +64,7 @@ test("verifyLicense returns success when registry reports valid", async () => {
       });
       assert.equal(result.valid, true);
       if (result.valid) {
-        assert.equal(result.claims.pluginSlug, "remote.demo");
+        assert.equal(result.claims.pluginSlug, "thirdparty.sample-pay");
         assert.ok(result.licenseExpiresAt instanceof Date);
       }
       assert.equal(calls.length, 1);
@@ -92,7 +92,7 @@ test("verifyLicense returns failure with reason when registry rejects", async ()
     async () => {
       const result = await verifyLicense({
         licenseKey: "header.payload.signature",
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         instanceId: "inst-Wrong",
         registryBaseUrl: "https://registry.example.com",
@@ -113,7 +113,7 @@ test("verifyLicense returns TRANSPORT_ERROR on HTTP failure", async () => {
     async () => {
       const result = await verifyLicense({
         licenseKey: "header.payload.signature",
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         instanceId: "inst-A",
         registryBaseUrl: "https://registry.example.com",
@@ -132,7 +132,7 @@ test("verifyLicense returns TRANSPORT_ERROR on network failure", async () => {
   await withMockFetch([new Error("network down")], async () => {
     const result = await verifyLicense({
       licenseKey: "header.payload.signature",
-      pluginSlug: "remote.demo",
+      pluginSlug: "thirdparty.sample-pay",
       version: "0.1.0",
       instanceId: "inst-A",
       registryBaseUrl: "https://registry.example.com",
@@ -148,10 +148,11 @@ test("verifyLicense returns TRANSPORT_ERROR on network failure", async () => {
 });
 
 test("NOVAPAY_DISABLE_LICENSE_CHECK skips remote call in non-production", async () => {
+  const env = process.env as Record<string, string | undefined>;
   const originalEnv = process.env.NOVAPAY_DISABLE_LICENSE_CHECK;
   const originalNodeEnv = process.env.NODE_ENV;
-  process.env.NOVAPAY_DISABLE_LICENSE_CHECK = "1";
-  process.env.NODE_ENV = "development";
+  env.NOVAPAY_DISABLE_LICENSE_CHECK = "1";
+  env.NODE_ENV = "development";
   // Capture console.warn so the test stays quiet.
   const originalWarn = console.warn;
   console.warn = () => {};
@@ -167,7 +168,7 @@ test("NOVAPAY_DISABLE_LICENSE_CHECK skips remote call in non-production", async 
     try {
       const result = await verifyLicense({
         licenseKey: "header.payload.signature",
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         instanceId: "inst-A",
         registryBaseUrl: "https://registry.example.com",
@@ -181,14 +182,14 @@ test("NOVAPAY_DISABLE_LICENSE_CHECK skips remote call in non-production", async 
     }
   } finally {
     if (originalEnv === undefined) {
-      delete process.env.NOVAPAY_DISABLE_LICENSE_CHECK;
+      delete env.NOVAPAY_DISABLE_LICENSE_CHECK;
     } else {
-      process.env.NOVAPAY_DISABLE_LICENSE_CHECK = originalEnv;
+      env.NOVAPAY_DISABLE_LICENSE_CHECK = originalEnv;
     }
     if (originalNodeEnv === undefined) {
-      delete process.env.NODE_ENV;
+      delete env.NODE_ENV;
     } else {
-      process.env.NODE_ENV = originalNodeEnv;
+      env.NODE_ENV = originalNodeEnv;
     }
     console.warn = originalWarn;
   }

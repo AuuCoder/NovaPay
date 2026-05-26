@@ -5,7 +5,6 @@ import {
   getPaginationState,
   getCallbackStatusLabel,
   getCallbackStatusTone,
-  getPaymentChannelOptions,
   getPaymentStatusLabel,
   getPaymentStatusTone,
   parsePageParam,
@@ -28,6 +27,7 @@ import {
 import { closeMerchantOrderAction, syncMerchantOrderAction } from "@/app/merchant/actions";
 import { PaymentRefundStatus, PaymentStatus } from "@/generated/prisma/enums";
 import { getCurrentLocale } from "@/lib/i18n-server";
+import { listMerchantInstalledPaymentChannelOptions } from "@/lib/plugins/marketplace";
 import { hasMerchantPermission } from "@/lib/merchant-rbac";
 import { requireMerchantPermission } from "@/lib/merchant-session";
 import { getPrismaClient } from "@/lib/prisma";
@@ -48,7 +48,10 @@ export default async function MerchantOrdersPage({
     readPageMessages(searchParams),
   ]);
   const requestedPage = parsePageParam(filters.page);
-  const paymentChannelOptions = getPaymentChannelOptions(locale);
+  const paymentChannelOptions = await listMerchantInstalledPaymentChannelOptions(
+    session.merchantUser.merchantId,
+    locale,
+  );
   const canManageOrders = hasMerchantPermission(session.merchantUser.role, "order:write");
   const canReadRefunds = hasMerchantPermission(session.merchantUser.role, "refund:read");
   const content =

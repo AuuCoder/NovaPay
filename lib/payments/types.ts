@@ -1,11 +1,6 @@
 import type { Merchant } from "@/generated/prisma/client";
 
-export type PaymentChannelCode =
-  | "alipay.page"
-  | "wxpay.native"
-  | "usdt.bsc"
-  | "usdt.base"
-  | "usdt.sol";
+export type PaymentChannelCode = string;
 
 export type PaymentCapability =
   | "page_redirect"
@@ -21,7 +16,7 @@ export type PaymentCapability =
 
 export interface PaymentChannelSummary {
   code: PaymentChannelCode;
-  provider: "alipay" | "wxpay" | "crypto";
+  provider: string;
   displayName: string;
   description: string;
   configured: boolean;

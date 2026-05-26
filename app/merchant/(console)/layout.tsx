@@ -30,10 +30,12 @@ export default async function MerchantConsoleLayout({
           overviewProfileDetail: "Maintain merchant identity, callback, and security settings",
           overviewCredentialsLabel: "API Credentials",
           overviewCredentialsDetail: "Create credentials and save one-time Secrets securely",
+          pluginsLabel: "Plugin Market",
           channelsLabel: "Channels",
           ordersLabel: "Orders",
           refundsLabel: "Refunds",
           overviewDetail: "Open summary view and jump into dedicated merchant operation pages",
+          pluginsDetail: "Install only the payment plugins this merchant actually plans to use",
           channelsDetail: "Configure payment channels and obtain dedicated upstream callback endpoints",
           ordersDetail: "Review merchant orders and synchronize transaction status",
           refundsDetail: "Initiate refunds and track refund outcomes",
@@ -53,10 +55,12 @@ export default async function MerchantConsoleLayout({
           overviewProfileDetail: "维护商户资料、业务回调与安全参数",
           overviewCredentialsLabel: "API 凭证",
           overviewCredentialsDetail: "创建凭证并保存一次性 Secret",
+          pluginsLabel: "插件市场",
           channelsLabel: "支付通道",
           ordersLabel: "我的订单",
           refundsLabel: "退款管理",
           overviewDetail: "打开摘要页，并进入独立的商户配置子页面。",
+          pluginsDetail: "只安装当前商户真正需要使用的支付插件",
           channelsDetail: "录入支付参数并获取专属上游回调地址。",
           ordersDetail: "查看当前商户订单，支持同步状态与关单。",
           refundsDetail: "发起退款并跟踪退款结果。",
@@ -101,6 +105,15 @@ export default async function MerchantConsoleLayout({
     ...(hasMerchantPermission(session.merchantUser.role, "channel:read")
       ? [
           {
+            href: "/merchant/plugins",
+            label: content.pluginsLabel,
+            detail: content.pluginsDetail,
+          },
+        ]
+      : []),
+    ...(hasMerchantPermission(session.merchantUser.role, "channel:read")
+      ? [
+          {
             href: "/merchant/channels",
             label: content.channelsLabel,
             detail: content.channelsDetail,
@@ -128,19 +141,19 @@ export default async function MerchantConsoleLayout({
   ];
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-4 py-4 sm:px-6 lg:px-8">
-      <div className="grid min-h-[calc(100vh-2rem)] gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="rounded-[2rem] border border-line bg-[#1f1812] p-6 text-[#f8efe6] shadow-[0_22px_80px_rgba(20,15,10,0.26)]">
+    <main className="flex min-h-screen w-full flex-col px-2 py-2 sm:px-3 sm:py-3 lg:px-4 lg:py-4">
+      <div className="grid min-h-[calc(100vh-1rem)] gap-2 sm:min-h-[calc(100vh-1.5rem)] sm:gap-3 lg:min-h-[calc(100vh-2rem)] lg:grid-cols-[248px_minmax(0,1fr)]">
+        <aside className="rounded-[1.75rem] border border-line bg-[#1f1812] p-5 text-[#f8efe6] shadow-[0_22px_80px_rgba(20,15,10,0.26)]">
           <Link
             href="/"
             className="inline-flex items-center rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.28em] text-[#dac7b3]"
           >
             NovaPay
           </Link>
-          <h1 className="mt-5 text-3xl font-semibold">{content.title}</h1>
-          <p className="mt-3 text-sm leading-7 text-[#e9dccd]">{content.intro}</p>
+          <h1 className="mt-4 text-2xl font-semibold">{content.title}</h1>
+          <p className="mt-3 text-sm leading-6 text-[#e9dccd]">{content.intro}</p>
 
-          <div className="mt-6 rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+          <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-white/5 p-4">
             <p className="text-sm font-medium text-white">{merchantDisplayName}</p>
             <div className="mt-4 border-t border-white/10 pt-4">
               <p className="text-sm text-white">{session.merchantUser.name}</p>
@@ -151,11 +164,11 @@ export default async function MerchantConsoleLayout({
             </div>
           </div>
 
-          <div className="mt-8">
+          <div className="mt-6">
             <MerchantNav items={navItems} />
           </div>
 
-          <div className="mt-8 flex flex-wrap gap-3">
+          <div className="mt-6 flex flex-wrap gap-3">
             <Link
               href="/docs"
               className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white"
@@ -173,7 +186,7 @@ export default async function MerchantConsoleLayout({
           </div>
         </aside>
 
-        <div className="rounded-[2rem] border border-line bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(255,248,240,0.82))] p-5 shadow-[var(--shadow)] sm:p-6 lg:p-8">
+        <div className="rounded-[1.5rem] border border-line bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(255,248,240,0.82))] p-4 shadow-[var(--shadow)] sm:p-5 lg:p-6">
           {children}
         </div>
       </div>

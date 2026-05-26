@@ -1,12 +1,12 @@
 /**
  * License revocation store and verifier cache invalidation (Req 13.8, 18.2).
  *
- * Phase 3 ships an in-memory revocation set so the License verifier can
- * short-circuit before signature verification. Production deployments will
- * back this with the LicenseRevocation Prisma table and trigger cache
- * invalidation on every revocation event.
+ * The Registry now supports both file-backed persistence for local/dev flows
+ * and Prisma-backed persistence via `createPrismaRevocationStore`.
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { RevocationLookup } from "./verifier";
 
 export interface RevocationRecord {
@@ -24,6 +24,24 @@ export interface RevocationStore extends RevocationLookup {
   invalidateCache(): void;
 }
 
+interface PersistedRevocationRecord extends Omit<RevocationRecord, "revokedAt"> {
+  revokedAt: string;
+}
+
+function toPersisted(record: RevocationRecord): PersistedRevocationRecord {
+  return {
+    ...record,
+    revokedAt: record.revokedAt.toISOString(),
+  };
+}
+
+function fromPersisted(record: PersistedRevocationRecord): RevocationRecord {
+  return {
+    ...record,
+    revokedAt: new Date(record.revokedAt),
+  };
+}
+
 export function createInMemoryRevocationStore(): RevocationStore {
   const byHash = new Map<string, RevocationRecord>();
 
@@ -35,10 +53,56 @@ export function createInMemoryRevocationStore(): RevocationStore {
       return byHash.has(licenseKeyHash);
     },
     async list() {
-      return [...byHash.values()].map((r) => ({ ...r }));
+      return [...byHash.values()]
+        .sort((left, right) => right.revokedAt.getTime() - left.revokedAt.getTime())
+        .map((r) => ({ ...r }));
     },
     invalidateCache() {
       // No-op for in-memory; production stores wire this to their cache layer.
+    },
+  };
+}
+
+export function createPersistentRevocationStore(filePath: string): RevocationStore {
+  function load() {
+    if (!existsSync(filePath)) {
+      return [] as PersistedRevocationRecord[];
+    }
+
+    try {
+      return JSON.parse(readFileSync(filePath, "utf8")) as PersistedRevocationRecord[];
+    } catch {
+      return [] as PersistedRevocationRecord[];
+    }
+  }
+
+  function save(records: RevocationRecord[]) {
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    writeFileSync(filePath, JSON.stringify(records.map(toPersisted), null, 2), "utf8");
+  }
+
+  const records = load().map(fromPersisted);
+  const byHash = new Map(records.map((record) => [record.licenseKeyHash, record]));
+
+  function ordered() {
+    return [...byHash.values()].sort(
+      (left, right) => right.revokedAt.getTime() - left.revokedAt.getTime(),
+    );
+  }
+
+  return {
+    async add(record) {
+      byHash.set(record.licenseKeyHash, { ...record });
+      save(ordered());
+    },
+    async isRevoked(licenseKeyHash) {
+      return byHash.has(licenseKeyHash);
+    },
+    async list() {
+      return ordered().map((record) => ({ ...record }));
+    },
+    invalidateCache() {
+      // File-backed store has no additional cache layer.
     },
   };
 }

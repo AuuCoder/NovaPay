@@ -71,6 +71,7 @@ export default async function CallbacksPage({
           deliveriesDesc:
             "Failed records include both error messages and destination URLs so teams can distinguish merchant endpoint issues from gateway configuration issues.",
           orderCol: "Order / Merchant",
+          pluginButton: "Open Plugin",
           statusCol: "Status",
           targetCol: "Target URL",
           httpCol: "HTTP",
@@ -112,6 +113,7 @@ export default async function CallbacksPage({
           deliveriesTitle: "回调投递记录",
           deliveriesDesc: "失败记录会带上错误信息和目标地址，便于分辨是商户接口问题还是网关配置问题。",
           orderCol: "订单 / 商户",
+          pluginButton: "查看插件",
           statusCol: "状态",
           targetCol: "目标地址",
           httpCol: "HTTP",
@@ -307,6 +309,19 @@ export default async function CallbacksPage({
                       <p className="mt-1 text-xs text-muted">
                         {attempt.paymentOrder.merchant.code} / {getMerchantDisplayName(attempt.paymentOrder.merchant.name, locale)}
                       </p>
+                      <p className="mt-1 font-mono text-[11px] text-muted">
+                        {attempt.paymentOrder.channelCode}
+                      </p>
+                      <Link
+                        href={buildPageHref(
+                          "/admin/plugins",
+                          { channelCode: attempt.paymentOrder.channelCode },
+                          1,
+                        )}
+                        className="mt-2 inline-flex rounded-xl border border-line bg-white px-2.5 py-1.5 text-[11px] font-medium text-foreground"
+                      >
+                        {content.pluginButton}
+                      </Link>
                     </td>
                     <td className="px-4 py-4">
                       <StatusBadge tone={getAttemptStatusTone(attempt.status)}>

@@ -5,6 +5,7 @@ import {
   installMarketplacePluginAction,
   markMarketplacePluginPurchasedAction,
   purchaseMarketplacePluginAction,
+  revalidateMarketplaceLicensesAction,
   syncMarketplacePluginsAction,
   toggleMarketplacePluginEnabledAction,
   uninstallMarketplacePluginAction,
@@ -30,8 +31,10 @@ import {
   subtleButtonClass,
   tableWrapperClass,
 } from "@/app/admin/ui";
+import { RegistryPurchaseFinalizer } from "./registry-purchase-finalizer";
 import { requireAdminPermission } from "@/lib/admin-session";
 import { getCurrentLocale } from "@/lib/i18n-server";
+import { getSchedulerStatus } from "@/lib/plugins/license-revalidation-scheduler";
 import { listMarketplacePaymentPlugins } from "@/lib/plugins/marketplace";
 import type { PaymentCapability } from "@/lib/payments/types";
 import { hasPermission } from "@/lib/rbac";
@@ -49,6 +52,25 @@ function formatDate(value: Date | null, locale: "zh" | "en") {
     minute: "2-digit",
     hour12: false,
   }).format(value);
+}
+
+function formatInterval(ms: number, locale: "zh" | "en") {
+  if (ms % (24 * 60 * 60 * 1000) === 0) {
+    const days = ms / (24 * 60 * 60 * 1000);
+    return locale === "en" ? `${days}d` : `${days} 天`;
+  }
+
+  if (ms % (60 * 60 * 1000) === 0) {
+    const hours = ms / (60 * 60 * 1000);
+    return locale === "en" ? `${hours}h` : `${hours} 小时`;
+  }
+
+  if (ms % (60 * 1000) === 0) {
+    const minutes = ms / (60 * 1000);
+    return locale === "en" ? `${minutes}m` : `${minutes} 分钟`;
+  }
+
+  return locale === "en" ? `${ms}ms` : `${ms} 毫秒`;
 }
 
 const PLUGIN_PAGE_SIZE = 10;
@@ -111,6 +133,28 @@ function getImplementationStatusLabel(
   return locale === "en" ? "Ready" : "可运行";
 }
 
+function getProviderKeyLabel(
+  providerKey: string,
+  locale: "zh" | "en",
+) {
+  const labels: Record<string, { zh: string; en: string }> = {
+    alipay: { zh: "支付宝", en: "Alipay" },
+    wxpay: { zh: "微信支付", en: "WeChat Pay" },
+    crypto: { zh: "加密支付", en: "Crypto" },
+    paypal: { zh: "PayPal", en: "PayPal" },
+  };
+
+  if (labels[providerKey]) {
+    return labels[providerKey][locale];
+  }
+
+  const normalized = providerKey
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (segment) => segment.toUpperCase());
+
+  return normalized || providerKey;
+}
+
 export default async function PluginsPage({
   searchParams,
 }: {
@@ -123,6 +167,7 @@ export default async function PluginsPage({
     readSearchFilters(searchParams, ["status", "channelCode", "q", "sort", "page"]),
   ]);
   const plugins = await listMarketplacePaymentPlugins(locale);
+  const schedulerStatus = getSchedulerStatus();
   const canManagePlugins = hasPermission(
     session.adminUser.role,
     "plugin_marketplace:write",
@@ -227,11 +272,28 @@ export default async function PluginsPage({
     locale === "en"
       ? {
           eyebrow: "Plugin Market",
-          title: "Controlled payment plugin marketplace",
+          title: "Remote plugin marketplace",
           description:
-            "Manage trusted built-in payment plugins from one compact operations view. Install, enable, and review runtime exposure without switching between oversized summary blocks.",
-          syncButton: "Sync Built-ins",
+            "Review, purchase, install, and enable plugins that were uploaded to the remote NovaPay plugin marketplace.",
+          syncButton: "Sync Marketplace",
+          revalidateButton: "Revalidate Licenses",
           sourcesButton: "Registry Sources",
+          monitorTitle: "License Revalidation",
+          monitorDesc:
+            "Track whether the background license monitor is running and whether the latest pass disabled any plugin due to revoked or expired licenses.",
+          monitorRunning: "Running",
+          monitorStopped: "Stopped",
+          monitorHealthy: "Healthy",
+          monitorError: "Needs Review",
+          monitorIdle: "Waiting for first run",
+          monitorInterval: "Interval",
+          monitorLastRun: "Last Run",
+          monitorLastResult: "Last Result",
+          monitorLastError: "Last Error",
+          monitorNotRunYet: "Not run yet",
+          monitorNoError: "No recent scheduler errors.",
+          monitorInspected: "Inspected",
+          monitorDisabled: "Disabled",
           toolbarTitle: "Catalog",
           toolbarDesc:
             "Filter the catalog first, then expand only the plugins that need a closer review.",
@@ -258,11 +320,13 @@ export default async function PluginsPage({
           sourceUntrusted: "Review Needed",
           sourceLocal: "Local Package",
           sourceBuiltin: "Built-in",
+          sourceRemote: "Registry Plugin",
           pricingFree: "Free",
           pricingPaid: "Paid",
           purchasedBadge: "Purchased",
           notPurchasedBadge: "Purchase Required",
           markPurchased: "Mark Purchased",
+          purchase: "Purchase",
           packageLabel: "Package",
           versionLabel: "Version",
           providerLabel: "Provider",
@@ -324,6 +388,8 @@ export default async function PluginsPage({
             "No active merchant runtime depends on this plugin right now.",
           localPackageHint:
             "This local package is currently manifest-only. It can be cataloged safely, but it cannot be enabled for live runtime execution yet.",
+          remoteRuntimeHint:
+            "This remote package is installed, but its runtime definition is not available in the current process yet.",
           merchantVisibilityImported:
             "This package is imported into platform governance, but merchants still cannot see it until you publish it.",
           merchantVisibilityPublished:
@@ -337,11 +403,28 @@ export default async function PluginsPage({
         }
       : {
           eyebrow: "Plugin Market",
-          title: "受控支付插件市场",
+          title: "远程插件市场",
           description:
-            "把插件管理收进一个紧凑的后台工作台里。安装、启用、排序、筛选都在同一视图完成，不再用大块统计卡片打断阅读。",
-          syncButton: "同步内置插件",
+            "这里集中管理远程 NovaPay 插件市场上传的插件，包括同步、购买、安装、启用和审核状态。",
+          syncButton: "同步插件市场",
+          revalidateButton: "重校验许可证",
           sourcesButton: "商店源配置",
+          monitorTitle: "许可证重校验",
+          monitorDesc:
+            "这里直接查看后台许可证巡检是否在运行，以及最近一次执行有没有因为许可证过期或撤销而停用插件。",
+          monitorRunning: "运行中",
+          monitorStopped: "未运行",
+          monitorHealthy: "状态正常",
+          monitorError: "需要关注",
+          monitorIdle: "等待首次执行",
+          monitorInterval: "执行周期",
+          monitorLastRun: "上次执行",
+          monitorLastResult: "最近结果",
+          monitorLastError: "最近错误",
+          monitorNotRunYet: "尚未执行",
+          monitorNoError: "最近没有调度器错误。",
+          monitorInspected: "检查数",
+          monitorDisabled: "停用数",
           toolbarTitle: "插件目录",
           toolbarDesc: "先筛选，再查看，最后只对需要处理的插件展开详情。",
           searchPlaceholder: "搜索插件名、通道、包名、提供方",
@@ -367,11 +450,13 @@ export default async function PluginsPage({
           sourceUntrusted: "待审核",
           sourceLocal: "本地插件包",
           sourceBuiltin: "内置插件",
+          sourceRemote: "远程商店插件",
           pricingFree: "免费",
           pricingPaid: "收费",
           purchasedBadge: "已购",
           notPurchasedBadge: "待购买",
           markPurchased: "记录已购",
+          purchase: "购买",
           packageLabel: "包名",
           versionLabel: "版本",
           providerLabel: "提供方",
@@ -429,6 +514,8 @@ export default async function PluginsPage({
           safeRuntimeHint: "当前没有启用中的商户运行时依赖这个插件。",
           localPackageHint:
             "当前本地插件包只完成了清单接入，可以纳入市场管理，但还不能启用为真实运行时实现。",
+          remoteRuntimeHint:
+            "当前远程插件包已经安装，但本进程里还拿不到完整运行时定义。",
           merchantVisibilityImported:
             "当前插件包已经导入平台目录，但在发布前商户侧仍然看不到它。",
           merchantVisibilityPublished:
@@ -442,21 +529,29 @@ export default async function PluginsPage({
         };
 
   type PluginItem = (typeof plugins)[number];
+  const schedulerTone = schedulerStatus.lastRunError
+    ? "danger"
+    : schedulerStatus.running
+      ? "success"
+      : "warning";
+  const schedulerLabel = schedulerStatus.lastRunError
+    ? content.monitorError
+    : schedulerStatus.running
+      ? content.monitorHealthy
+      : content.monitorIdle;
 
   function getInstallStatusLabel(plugin: PluginItem) {
-    if (plugin.source === "LOCAL_PACKAGE") {
-      return plugin.installed ? content.importedBadge : content.notImportedBadge;
-    }
-
     return plugin.installed ? content.installedBadge : content.notInstalledBadge;
   }
 
   function getRuntimeStatusLabel(plugin: PluginItem) {
-    if (plugin.source === "LOCAL_PACKAGE") {
-      return plugin.enabled ? content.publishedBadge : content.notPublishedBadge;
-    }
-
     return plugin.enabled ? content.enabledBadge : content.disabledBadge;
+  }
+
+  function getSourceLabel(plugin: PluginItem) {
+    return plugin.source === "REMOTE_SIGNED"
+      ? content.sourceRemote
+      : content.sourceBuiltin;
   }
 
   function getPluginActionState(plugin: PluginItem) {
@@ -518,20 +613,12 @@ export default async function PluginsPage({
       return <p className="text-[11px] leading-5 text-[#aa5a16]">{content.configuredUsageWarning}</p>;
     }
 
-    if (plugin.source === "LOCAL_PACKAGE") {
-      if (!plugin.installed) {
-        return <p className="text-[11px] leading-5 text-muted">{content.merchantVisibilityUnimported}</p>;
-      }
-
-      if (!plugin.enabled) {
-        return <p className="text-[11px] leading-5 text-muted">{content.merchantVisibilityImported}</p>;
-      }
-
-      return <p className="text-[11px] leading-5 text-muted">{content.merchantVisibilityPublished}</p>;
-    }
-
     if (!state.canRun) {
-      return <p className="text-[11px] leading-5 text-muted">{content.localPackageHint}</p>;
+      return (
+        <p className="text-[11px] leading-5 text-muted">
+          {content.remoteRuntimeHint}
+        </p>
+      );
     }
 
     return <p className="text-[11px] leading-5 text-muted">{content.safeRuntimeHint}</p>;
@@ -555,7 +642,7 @@ export default async function PluginsPage({
               disabled={plugin.pricingMode === "PAID" && !plugin.purchasedAt}
               className={`${buttonClass} w-full px-2.5 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-45`}
             >
-              {plugin.source === "LOCAL_PACKAGE" ? content.import : content.install}
+              {content.install}
             </button>
           </form>
           {state.canMarkPurchased ? (
@@ -564,7 +651,7 @@ export default async function PluginsPage({
                 <input type="hidden" name="slug" value={plugin.slug} />
                 <input type="hidden" name="redirectTo" value="/admin/plugins" />
                 <button type="submit" className={`${buttonClass} w-full px-2.5 py-2 text-xs`}>
-                  {locale === "en" ? "Purchase" : "购买"}
+                  {content.purchase}
                 </button>
               </form>
               <form action={markMarketplacePluginPurchasedAction}>
@@ -594,12 +681,8 @@ export default async function PluginsPage({
             }`}
           >
             {plugin.enabled
-              ? plugin.source === "LOCAL_PACKAGE"
-                ? content.unpublish
-                : content.disable
-              : plugin.source === "LOCAL_PACKAGE"
-                ? content.publish
-                : content.enable}
+              ? content.disable
+              : content.enable}
           </button>
         </form>
         <form action={uninstallMarketplacePluginAction}>
@@ -610,7 +693,7 @@ export default async function PluginsPage({
             disabled={!state.canUninstall}
             className={`${subtleButtonClass} w-full px-2.5 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-45`}
           >
-            {plugin.source === "LOCAL_PACKAGE" ? content.remove : content.uninstall}
+            {content.uninstall}
           </button>
         </form>
       </>
@@ -661,6 +744,11 @@ export default async function PluginsPage({
             <p>{content.providerLabel}: {plugin.vendor}</p>
             <p>{content.packageLabel}: {plugin.packageName}</p>
             <p>{content.versionLabel}: {plugin.version}</p>
+            <p>
+              {content.channelCol}: {plugin.channelCode}
+              {" · "}
+              {content.providerLabel}: {getProviderKeyLabel(plugin.providerKey, locale)}
+            </p>
             <p>
               {content.callbackRouteLabel}:{" "}
               {plugin.supportsCallbackRoute
@@ -731,6 +819,7 @@ export default async function PluginsPage({
 
   return (
     <div className="space-y-5">
+      <RegistryPurchaseFinalizer locale={locale} />
       <AdminPageHeader
         eyebrow={content.eyebrow}
         title={content.title}
@@ -741,18 +830,83 @@ export default async function PluginsPage({
               {content.sourcesButton}
             </Link>
             {canManagePlugins ? (
-              <form action={syncMarketplacePluginsAction}>
-                <input type="hidden" name="redirectTo" value="/admin/plugins" />
-                <button type="submit" className={buttonClass}>
-                  {content.syncButton}
-                </button>
-              </form>
+              <>
+                <form action={revalidateMarketplaceLicensesAction}>
+                  <input type="hidden" name="redirectTo" value="/admin/plugins" />
+                  <button type="submit" className={subtleButtonClass}>
+                    {content.revalidateButton}
+                  </button>
+                </form>
+                <form action={syncMarketplacePluginsAction}>
+                  <input type="hidden" name="redirectTo" value="/admin/plugins" />
+                  <button type="submit" className={buttonClass}>
+                    {content.syncButton}
+                  </button>
+                </form>
+              </>
             ) : null}
           </>
         }
       />
 
       <FlashMessage success={messages.success} error={messages.error} />
+
+      <section className={`${panelClass} p-4 sm:p-5`}>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <h2 className="text-xl font-semibold text-foreground">{content.monitorTitle}</h2>
+            <p className="max-w-3xl text-sm leading-6 text-muted">{content.monitorDesc}</p>
+          </div>
+          <StatusBadge tone={schedulerTone}>
+            {schedulerStatus.running ? content.monitorRunning : content.monitorStopped}
+            {" · "}
+            {schedulerLabel}
+          </StatusBadge>
+        </div>
+
+        <div className="mt-5 grid gap-3 lg:grid-cols-4">
+          <div className="rounded-[1.25rem] border border-line bg-white/75 p-4">
+            <p className="text-xs uppercase tracking-[0.18em] text-muted">
+              {content.monitorInterval}
+            </p>
+            <p className="mt-2 text-lg font-semibold text-foreground">
+              {formatInterval(schedulerStatus.intervalMs, locale)}
+            </p>
+          </div>
+          <div className="rounded-[1.25rem] border border-line bg-white/75 p-4">
+            <p className="text-xs uppercase tracking-[0.18em] text-muted">
+              {content.monitorLastRun}
+            </p>
+            <p className="mt-2 text-sm font-medium text-foreground">
+              {schedulerStatus.lastRunAt
+                ? formatDate(schedulerStatus.lastRunAt, locale)
+                : content.monitorNotRunYet}
+            </p>
+          </div>
+          <div className="rounded-[1.25rem] border border-line bg-white/75 p-4">
+            <p className="text-xs uppercase tracking-[0.18em] text-muted">
+              {content.monitorLastResult}
+            </p>
+            <p className="mt-2 text-sm font-medium text-foreground">
+              {content.monitorInspected}: {schedulerStatus.lastRunResult?.inspected ?? 0}
+              {" · "}
+              {content.monitorDisabled}: {schedulerStatus.lastRunResult?.disabled ?? 0}
+            </p>
+          </div>
+          <div className="rounded-[1.25rem] border border-line bg-white/75 p-4">
+            <p className="text-xs uppercase tracking-[0.18em] text-muted">
+              {content.monitorLastError}
+            </p>
+            <p
+              className={`mt-2 text-sm ${
+                schedulerStatus.lastRunError ? "text-[#973225]" : "text-muted"
+              }`}
+            >
+              {schedulerStatus.lastRunError ?? content.monitorNoError}
+            </p>
+          </div>
+        </div>
+      </section>
 
       <section className={`${panelClass} p-4 sm:p-5`}>
         <div className="flex flex-col gap-5">
@@ -933,10 +1087,8 @@ export default async function PluginsPage({
                           <StatusBadge tone={plugin.trusted ? "success" : "warning"}>
                             {plugin.trusted ? content.sourceTrusted : content.sourceUntrusted}
                           </StatusBadge>
-                          <StatusBadge tone={plugin.source === "LOCAL_PACKAGE" ? "warning" : "neutral"}>
-                            {plugin.source === "LOCAL_PACKAGE"
-                              ? content.sourceLocal
-                              : content.sourceBuiltin}
+                          <StatusBadge tone={plugin.source === "REMOTE_SIGNED" ? "neutral" : "warning"}>
+                            {getSourceLabel(plugin)}
                           </StatusBadge>
                           {plugin.pricingMode ? (
                             <StatusBadge tone={plugin.pricingMode === "PAID" ? "warning" : "success"}>
@@ -1056,11 +1208,9 @@ export default async function PluginsPage({
                                 {getRuntimeStatusLabel(plugin)}
                               </StatusBadge>
                               <StatusBadge
-                                tone={plugin.source === "LOCAL_PACKAGE" ? "warning" : "neutral"}
+                                tone={plugin.source === "REMOTE_SIGNED" ? "neutral" : "warning"}
                               >
-                                {plugin.source === "LOCAL_PACKAGE"
-                                  ? content.sourceLocal
-                                  : content.sourceBuiltin}
+                                {getSourceLabel(plugin)}
                               </StatusBadge>
                               {plugin.pricingMode ? (
                                 <StatusBadge tone={plugin.pricingMode === "PAID" ? "warning" : "success"}>
@@ -1188,11 +1338,9 @@ export default async function PluginsPage({
                                   : content.sourceUntrusted}
                               </StatusBadge>
                               <StatusBadge
-                                tone={plugin.source === "LOCAL_PACKAGE" ? "warning" : "neutral"}
+                                tone={plugin.source === "REMOTE_SIGNED" ? "neutral" : "warning"}
                               >
-                                {plugin.source === "LOCAL_PACKAGE"
-                                  ? content.sourceLocal
-                                  : content.sourceBuiltin}
+                                {getSourceLabel(plugin)}
                               </StatusBadge>
                               {plugin.pricingMode ? (
                                 <StatusBadge tone={plugin.pricingMode === "PAID" ? "warning" : "success"}>
@@ -1230,7 +1378,7 @@ export default async function PluginsPage({
                               {plugin.channelCode}
                             </p>
                             <p className="mt-1.5 text-xs text-muted">
-                              {plugin.channelSummary.provider}
+                              {getProviderKeyLabel(plugin.channelSummary.provider, locale)}
                             </p>
                           </td>
                           <td className="px-4 py-3.5">

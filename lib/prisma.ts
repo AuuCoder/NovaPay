@@ -7,6 +7,10 @@ declare global {
 }
 
 const REQUIRED_DELEGATES = [
+  "marketplacePlugin",
+  "pluginRegistrySource",
+  "pluginPackageInstall",
+  "merchantInstalledPlugin",
   "merchant",
   "merchantUser",
   "merchantSession",

@@ -4,10 +4,10 @@ import {
   buildPageHref,
   formatDateTime,
   formatMoney,
+  getActivePaymentChannelOptions,
   getPaginationState,
   getCallbackStatusLabel,
   getCallbackStatusTone,
-  getPaymentChannelOptions,
   getPaymentStatusLabel,
   getPaymentStatusTone,
   parsePageParam,
@@ -42,7 +42,7 @@ export default async function OrdersPage({
   await requireAdminPermission("order:read");
   const prisma = getPrismaClient();
   const locale = await getCurrentLocale();
-  const paymentChannelOptions = getPaymentChannelOptions(locale);
+  const paymentChannelOptions = await getActivePaymentChannelOptions(locale);
   const filters = await readSearchFilters(searchParams, [
     "merchantCode",
     "channelCode",
@@ -89,6 +89,7 @@ export default async function OrdersPage({
           orderCol: "Order",
           merchantCol: "Merchant",
           channelCol: "Channel",
+          pluginButton: "Open Plugin",
           amountCol: "Amount",
           paymentStatusCol: "Payment Status",
           callbackCol: "Merchant Callback",
@@ -138,6 +139,7 @@ export default async function OrdersPage({
           orderCol: "订单",
           merchantCol: "商户",
           channelCol: "通道",
+          pluginButton: "查看插件",
           amountCol: "金额",
           paymentStatusCol: "支付状态",
           callbackCol: "商户回调",
@@ -355,7 +357,19 @@ export default async function OrdersPage({
                       </Link>
                       <p className="mt-1 text-xs text-muted">{order.merchant.code}</p>
                     </td>
-                    <td className="px-4 py-4 font-mono text-xs text-foreground">{order.channelCode}</td>
+                    <td className="px-4 py-4 text-xs">
+                      <p className="font-mono text-foreground">{order.channelCode}</p>
+                      <Link
+                        href={buildPageHref(
+                          "/admin/plugins",
+                          { channelCode: order.channelCode },
+                          1,
+                        )}
+                        className="mt-2 inline-flex rounded-xl border border-line bg-white px-2.5 py-1.5 text-[11px] font-medium text-foreground"
+                      >
+                        {content.pluginButton}
+                      </Link>
+                    </td>
                     <td className="px-4 py-4 text-xs text-foreground">
                       {formatMoney(order.amount.toString(), order.currency, locale)}
                     </td>

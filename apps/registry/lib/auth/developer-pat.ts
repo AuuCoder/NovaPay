@@ -7,11 +7,15 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface DeveloperTokenRecord {
   id: string;
   developerId: string;
   tokenHash: string;
+  tokenPreview: string;
   name: string;
   status: "ACTIVE" | "REVOKED";
   lastUsedAt: Date | null;
@@ -52,6 +56,27 @@ export type PatAuthOutcome = AuthenticatePatResult | AuthenticatePatError;
 
 const TOKEN_PREFIX = "nvreg_";
 const TOKEN_BYTE_LENGTH = 32;
+const REGISTRY_PROJECT_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+);
+const PAT_STATE_FILE = path.join(
+  REGISTRY_PROJECT_ROOT,
+  ".tmp",
+  "registry-pat-state.json",
+);
+
+interface PersistedDeveloperTokenRecord
+  extends Omit<DeveloperTokenRecord, "lastUsedAt" | "createdAt" | "revokedAt"> {
+  lastUsedAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+interface PatStateSnapshot {
+  tokens: PersistedDeveloperTokenRecord[];
+}
 
 export function generateRawToken(): string {
   return `${TOKEN_PREFIX}${randomBytes(TOKEN_BYTE_LENGTH).toString("hex")}`;
@@ -61,6 +86,47 @@ export function hashToken(rawToken: string): string {
   return createHash("sha256").update(rawToken).digest("hex");
 }
 
+export function maskTokenForDisplay(rawToken: string): string {
+  const suffix = rawToken.slice(-4);
+  return `${TOKEN_PREFIX}******${suffix}`;
+}
+
+function loadPatState(): PatStateSnapshot {
+  if (!existsSync(PAT_STATE_FILE)) {
+    return { tokens: [] };
+  }
+
+  try {
+    return JSON.parse(readFileSync(PAT_STATE_FILE, "utf8")) as PatStateSnapshot;
+  } catch {
+    return { tokens: [] };
+  }
+}
+
+function savePatState(state: PatStateSnapshot) {
+  mkdirSync(path.dirname(PAT_STATE_FILE), { recursive: true });
+  writeFileSync(PAT_STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+}
+
+function toPersistedRecord(record: DeveloperTokenRecord): PersistedDeveloperTokenRecord {
+  return {
+    ...record,
+    lastUsedAt: record.lastUsedAt?.toISOString() ?? null,
+    createdAt: record.createdAt.toISOString(),
+    revokedAt: record.revokedAt?.toISOString() ?? null,
+  };
+}
+
+function toTokenRecord(record: PersistedDeveloperTokenRecord): DeveloperTokenRecord {
+  return {
+    ...record,
+    tokenPreview: record.tokenPreview ?? `${TOKEN_PREFIX}******unknown`,
+    lastUsedAt: record.lastUsedAt ? new Date(record.lastUsedAt) : null,
+    createdAt: new Date(record.createdAt),
+    revokedAt: record.revokedAt ? new Date(record.revokedAt) : null,
+  };
+}
+
 export function createPat(input: CreatePatInput): CreatePatResult {
   const rawToken = generateRawToken();
   const now = new Date();
@@ -68,6 +134,7 @@ export function createPat(input: CreatePatInput): CreatePatResult {
     id: `tok_${randomBytes(12).toString("hex")}`,
     developerId: input.developerId,
     tokenHash: hashToken(rawToken),
+    tokenPreview: maskTokenForDisplay(rawToken),
     name: input.name,
     status: "ACTIVE",
     lastUsedAt: null,
@@ -141,6 +208,62 @@ export function createInMemoryPatStore(): PatStore {
     async updateLastUsed(id) {
       const record = records.get(id);
       if (record) record.lastUsedAt = new Date();
+    },
+  };
+}
+
+export function createPersistentPatStore(): PatStore {
+  return {
+    async create(record) {
+      const state = loadPatState();
+      state.tokens.push(toPersistedRecord(record));
+      savePatState(state);
+      return { ...record };
+    },
+    async findByHash(tokenHash) {
+      const state = loadPatState();
+      const record = state.tokens.find((item) => item.tokenHash === tokenHash);
+      return record ? toTokenRecord(record) : null;
+    },
+    async revoke(id, developerId) {
+      const state = loadPatState();
+      const index = state.tokens.findIndex(
+        (item) => item.id === id && item.developerId === developerId,
+      );
+
+      if (index < 0) {
+        return null;
+      }
+
+      const updated = {
+        ...state.tokens[index]!,
+        status: "REVOKED" as const,
+        revokedAt: new Date().toISOString(),
+      };
+      state.tokens[index] = updated;
+      savePatState(state);
+      return toTokenRecord(updated);
+    },
+    async listByDeveloper(developerId) {
+      const state = loadPatState();
+      return state.tokens
+        .filter((item) => item.developerId === developerId)
+        .map((item) => toTokenRecord(item))
+        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+    },
+    async updateLastUsed(id) {
+      const state = loadPatState();
+      const index = state.tokens.findIndex((item) => item.id === id);
+
+      if (index < 0) {
+        return;
+      }
+
+      state.tokens[index] = {
+        ...state.tokens[index]!,
+        lastUsedAt: new Date().toISOString(),
+      };
+      savePatState(state);
     },
   };
 }

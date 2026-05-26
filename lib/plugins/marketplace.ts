@@ -11,11 +11,6 @@ import type {
 } from "@/generated/prisma/client";
 import type { Locale } from "@/lib/i18n";
 import { pickByLocale } from "@/lib/i18n";
-import {
-  discoverLocalPluginPackageManifests,
-  type LocalPluginPackageManifest,
-} from "@/lib/plugins/local-package-manifests";
-import { loadLocalPaymentPluginRuntimeInspection } from "@/lib/plugins/local-package-runtimes";
 import { loadPaymentPluginRuntimeInspectionFromManifestPath } from "@/lib/plugins/local-package-runtimes";
 import { fetchRemoteRegistrySnapshots } from "@/lib/plugins/remote-registry";
 import { getPaymentPlugin, listPaymentPlugins } from "@/lib/payments/plugins";
@@ -125,6 +120,8 @@ export interface MerchantMarketplacePaymentPluginRecord
   extends MarketplacePaymentPluginRecord {
   merchantInstalled: boolean;
   merchantInstalledAt: Date | null;
+  merchantPurchased: boolean;
+  merchantPurchasedAt: Date | null;
 }
 
 export interface MarketplacePluginMerchantInstallRecord {
@@ -138,6 +135,7 @@ export interface MarketplacePluginMerchantInstallRecord {
 
 export interface MarketplacePluginPurchaseRecord {
   id: string;
+  merchantId: string | null;
   orderReference: string | null;
   licenseKey: string | null;
   priceLabel: string | null;
@@ -179,31 +177,6 @@ interface RemotePluginPackageBundle {
 
 function listBuiltinPaymentPlugins() {
   return listPaymentPlugins();
-}
-
-async function loadLocalPaymentPluginDefinitionsMap() {
-  const manifests = await discoverLocalPluginPackageManifests();
-  const inspections = await Promise.all(
-    manifests.map(async (manifest) => ({
-      manifest,
-      inspection: await loadLocalPaymentPluginRuntimeInspection(manifest),
-    })),
-  );
-
-  return new Map(
-    inspections
-      .filter(
-        (item): item is {
-          manifest: LocalPluginPackageManifest;
-          inspection: {
-            definition: PaymentPluginDefinition;
-            runnable: boolean;
-            loadError: string | null;
-          };
-        } => Boolean(item.inspection.definition),
-      )
-      .map((item) => [item.manifest.channelCode, item.inspection]),
-  );
 }
 
 async function loadRemoteInstalledPaymentPluginDefinitionsMap() {
@@ -272,21 +245,6 @@ function toMarketplaceMetadata(plugin: PaymentPluginDefinition) {
   } satisfies Prisma.InputJsonObject;
 }
 
-function toLocalPluginMetadata(manifest: LocalPluginPackageManifest) {
-  return {
-    category: manifest.category as unknown as Prisma.InputJsonObject,
-    summary: manifest.summary as unknown as Prisma.InputJsonObject,
-    description: manifest.detail as unknown as Prisma.InputJsonObject,
-    callbackPathSegment: null,
-    merchantProfileRequired: manifest.requiresMerchantProfileCompletion,
-    localPath: manifest.localPath,
-    manifestVersion: manifest.manifestVersion,
-    runtimeEntrypoint: manifest.runtimeEntrypoint,
-    runtimePath: manifest.runtimePath,
-    runnable: manifest.runnable,
-  } satisfies Prisma.InputJsonObject;
-}
-
 async function upsertBuiltinMarketplacePlugin(plugin: PaymentPluginDefinition) {
   const prisma = getPrismaClient();
   const summary = plugin.provider.getSummary();
@@ -308,6 +266,9 @@ async function upsertBuiltinMarketplacePlugin(plugin: PaymentPluginDefinition) {
       capabilities: summary.capabilities,
       metadata: toMarketplaceMetadata(plugin),
       trusted: true,
+      installed: true,
+      enabled: true,
+      installedAt: new Date(),
       lastSyncedAt: new Date(),
     },
     create: {
@@ -335,73 +296,6 @@ async function upsertBuiltinMarketplacePlugin(plugin: PaymentPluginDefinition) {
 async function runBuiltinMarketplaceSync() {
   const plugins = listBuiltinPaymentPlugins();
   await Promise.all(plugins.map((plugin) => upsertBuiltinMarketplacePlugin(plugin)));
-}
-
-async function syncLocalMarketplacePackages() {
-  const prisma = getPrismaClient();
-  const manifests = await discoverLocalPluginPackageManifests();
-  const inspections = await Promise.all(
-    manifests.map(async (manifest) => ({
-      manifest,
-      inspection: await loadLocalPaymentPluginRuntimeInspection(manifest),
-    })),
-  );
-
-  await Promise.all(
-    inspections.map(({ manifest, inspection }) =>
-      prisma.marketplacePlugin.upsert({
-        where: {
-          slug: manifest.slug,
-        },
-        update: {
-          kind: PAYMENT_PLUGIN_KIND,
-          source: manifest.source,
-          channelCode: manifest.channelCode,
-          providerKey: manifest.providerKey,
-          packageName: manifest.packageName,
-          displayName: manifest.displayName,
-          vendor: manifest.vendor,
-          description: manifest.description,
-          version: manifest.version,
-          capabilities: manifest.capabilities,
-          metadata: {
-            ...toLocalPluginMetadata(manifest),
-            runnable: inspection.runnable,
-            loadError: inspection.loadError,
-          } as Prisma.InputJsonObject,
-          trusted: false,
-          ...(inspection.runnable
-            ? {}
-            : {
-                enabled: false,
-              }),
-          lastSyncedAt: new Date(),
-        },
-        create: {
-          slug: manifest.slug,
-          kind: PAYMENT_PLUGIN_KIND,
-          source: manifest.source,
-          channelCode: manifest.channelCode,
-          providerKey: manifest.providerKey,
-          packageName: manifest.packageName,
-          displayName: manifest.displayName,
-          vendor: manifest.vendor,
-          description: manifest.description,
-          version: manifest.version,
-          capabilities: manifest.capabilities,
-          metadata: {
-            ...toLocalPluginMetadata(manifest),
-            runnable: inspection.runnable,
-            loadError: inspection.loadError,
-          } as Prisma.InputJsonObject,
-          trusted: false,
-          installed: false,
-          enabled: false,
-          lastSyncedAt: new Date(),
-        },
-      }),
-    ),
-  );
 }
 
 async function syncRemoteMarketplaceRegistry() {
@@ -444,7 +338,12 @@ async function syncRemoteMarketplaceRegistry() {
             checksum: plugin.checksum,
             signature: plugin.signature,
             capabilities: plugin.capabilities,
-            metadata: (plugin.metadata ?? {}) as Prisma.InputJsonObject,
+            metadata: {
+              ...(plugin.metadata ?? {}),
+              pricingPlanKind: plugin.pricingPlanKind ?? null,
+              priceAmountCents: plugin.priceAmountCents ?? null,
+              priceCurrency: plugin.priceCurrency ?? null,
+            } as Prisma.InputJsonObject,
             trusted: true,
             lastSyncedAt: new Date(),
           },
@@ -470,7 +369,12 @@ async function syncRemoteMarketplaceRegistry() {
             checksum: plugin.checksum,
             signature: plugin.signature,
             capabilities: plugin.capabilities,
-            metadata: (plugin.metadata ?? {}) as Prisma.InputJsonObject,
+            metadata: {
+              ...(plugin.metadata ?? {}),
+              pricingPlanKind: plugin.pricingPlanKind ?? null,
+              priceAmountCents: plugin.priceAmountCents ?? null,
+              priceCurrency: plugin.priceCurrency ?? null,
+            } as Prisma.InputJsonObject,
             trusted: true,
             installed: false,
             enabled: false,
@@ -493,11 +397,13 @@ export async function syncBuiltinMarketplacePlugins(force = false) {
     return marketplaceSyncPromise;
   }
 
-  marketplaceSyncPromise = Promise.all([
-    runBuiltinMarketplaceSync(),
-    syncLocalMarketplacePackages(),
-    syncRemoteMarketplaceRegistry(),
-  ])
+  marketplaceSyncPromise = (async () => {
+    // Run built-ins first, then let remote registry snapshots win on slug
+    // collisions. This avoids a race where local built-ins overwrite
+    // REMOTE_SIGNED rows for the same official plugin slugs.
+    await runBuiltinMarketplaceSync();
+    await syncRemoteMarketplaceRegistry();
+  })()
     .then(() => {
       lastMarketplaceSyncAt = Date.now();
     })
@@ -831,6 +737,7 @@ async function syncMerchantInstalledPluginsFromUsage(merchantId: string) {
     prisma.marketplacePlugin.findMany({
       where: {
         kind: PAYMENT_PLUGIN_KIND,
+        source: "REMOTE_SIGNED",
       },
       select: {
         slug: true,
@@ -877,13 +784,13 @@ async function syncMerchantInstalledPluginsFromUsage(merchantId: string) {
 
 async function listEnabledPaymentPluginDefinitions() {
   await syncBuiltinMarketplacePlugins();
-  const localDefinitions = await loadLocalPaymentPluginDefinitionsMap();
   const remoteDefinitions = await loadRemoteInstalledPaymentPluginDefinitionsMap();
   const rows = await getPrismaClient().marketplacePlugin.findMany({
     where: {
       kind: PAYMENT_PLUGIN_KIND,
       installed: true,
       enabled: true,
+      source: "REMOTE_SIGNED",
     },
     select: {
       channelCode: true,
@@ -898,10 +805,7 @@ async function listEnabledPaymentPluginDefinitions() {
       }
 
       return (
-        getPaymentPlugin(row.channelCode) ??
-        remoteDefinitions.get(row.channelCode)?.inspection.definition ??
-        localDefinitions.get(row.channelCode)?.definition ??
-        null
+        remoteDefinitions.get(row.channelCode)?.inspection.definition ?? null
       );
     })
     .filter((plugin): plugin is PaymentPluginDefinition => Boolean(plugin));
@@ -909,7 +813,6 @@ async function listEnabledPaymentPluginDefinitions() {
 
 async function listMerchantEnabledPaymentPluginDefinitions(merchantId: string) {
   await syncMerchantInstalledPluginsFromUsage(merchantId);
-  const localDefinitions = await loadLocalPaymentPluginDefinitionsMap();
   const remoteDefinitions = await loadRemoteInstalledPaymentPluginDefinitionsMap();
   const rows = await getPrismaClient().merchantInstalledPlugin.findMany({
     where: {
@@ -918,6 +821,7 @@ async function listMerchantEnabledPaymentPluginDefinitions(merchantId: string) {
         kind: PAYMENT_PLUGIN_KIND,
         installed: true,
         enabled: true,
+        source: "REMOTE_SIGNED",
       },
     },
     select: {
@@ -936,10 +840,7 @@ async function listMerchantEnabledPaymentPluginDefinitions(merchantId: string) {
       }
 
       return (
-        getPaymentPlugin(row.plugin.channelCode) ??
-        remoteDefinitions.get(row.plugin.channelCode)?.inspection.definition ??
-        localDefinitions.get(row.plugin.channelCode)?.definition ??
-        null
+        remoteDefinitions.get(row.plugin.channelCode)?.inspection.definition ?? null
       );
     })
     .filter((plugin): plugin is PaymentPluginDefinition => Boolean(plugin));
@@ -949,11 +850,11 @@ export async function listMarketplacePaymentPlugins(
   locale: Locale = "zh",
 ) {
   await syncBuiltinMarketplacePlugins();
-  const localDefinitions = await loadLocalPaymentPluginDefinitionsMap();
   const remoteDefinitions = await loadRemoteInstalledPaymentPluginDefinitionsMap();
   const rows = await getPrismaClient().marketplacePlugin.findMany({
     where: {
       kind: PAYMENT_PLUGIN_KIND,
+      source: "REMOTE_SIGNED",
     },
     orderBy: [{ installed: "desc" }, { trusted: "desc" }, { slug: "asc" }],
   });
@@ -964,18 +865,15 @@ export async function listMarketplacePaymentPlugins(
         return null;
       }
 
-      const plugin =
-        getPaymentPlugin(row.channelCode) ??
-        remoteDefinitions.get(row.channelCode)?.inspection.definition ??
-        localDefinitions.get(row.channelCode)?.definition ??
-        null;
+      const installedRuntimeDefinition =
+        remoteDefinitions.get(row.channelCode)?.inspection.definition ?? null;
 
-      if (!plugin) {
+      if (!installedRuntimeDefinition) {
         return toLocalMarketplacePaymentRecord(row, locale);
       }
 
       const usage = await getMarketplacePluginUsage(row.channelCode);
-      return toMarketplacePaymentRecord(plugin, row, locale, usage);
+      return toMarketplacePaymentRecord(installedRuntimeDefinition, row, locale, usage);
     }),
   );
 
@@ -989,7 +887,6 @@ export async function getMarketplacePaymentPluginDetail(
   locale: Locale = "zh",
 ): Promise<MarketplacePaymentPluginDetailRecord | null> {
   await syncBuiltinMarketplacePlugins();
-  const localDefinitions = await loadLocalPaymentPluginDefinitionsMap();
   const remoteDefinitions = await loadRemoteInstalledPaymentPluginDefinitionsMap();
   const row = await getPrismaClient().marketplacePlugin.findUnique({
     where: {
@@ -1019,33 +916,15 @@ export async function getMarketplacePaymentPluginDetail(
     return null;
   }
 
+  if (row.source !== "REMOTE_SIGNED") {
+    return null;
+  }
+
   const plugin =
-    getPaymentPlugin(row.channelCode) ??
-    remoteDefinitions.get(row.channelCode)?.inspection.definition ??
-    localDefinitions.get(row.channelCode)?.definition ??
-    null;
+    remoteDefinitions.get(row.channelCode)?.inspection.definition ?? null;
 
   if (!plugin) {
-    const localRecord = toLocalMarketplacePaymentRecord(row, locale);
-
-    if (!localRecord) {
-      return null;
-    }
-
-    return {
-      ...localRecord,
-      merchantInstalls: [],
-      purchaseRecords: row.purchaseRecords.map((record) => ({
-        id: record.id,
-        orderReference: record.orderReference,
-        licenseKey: record.licenseKey,
-        priceLabel: record.priceLabel,
-        purchaseUrl: record.purchaseUrl,
-        notes: record.notes,
-        purchasedBy: record.purchasedBy,
-        purchasedAt: record.purchasedAt,
-      })),
-    };
+    return null;
   }
 
   const usage = await getMarketplacePluginUsage(row.channelCode);
@@ -1082,6 +961,7 @@ export async function getMarketplacePaymentPluginDetail(
     merchantInstalls,
     purchaseRecords: row.purchaseRecords.map((record) => ({
       id: record.id,
+      merchantId: record.merchantId ?? null,
       orderReference: record.orderReference,
       licenseKey: record.licenseKey,
       priceLabel: record.priceLabel,
@@ -1161,7 +1041,7 @@ export async function getMarketplacePluginSafetyState(
 
 async function recordInstallFailure(
   prisma: ReturnType<typeof getPrismaClient>,
-  plugin: { slug: string; downloadUrl: string | null },
+  plugin: { slug: string; downloadUrl: string | null; registrySourceId?: string | null },
   version: string,
   loadError: string,
 ) {
@@ -1169,6 +1049,7 @@ async function recordInstallFailure(
   await prisma.pluginPackageInstall.create({
     data: {
       pluginSlug: plugin.slug,
+      sourceId: plugin.registrySourceId ?? null,
       version,
       downloadUrl: plugin.downloadUrl,
       installPath,
@@ -1194,6 +1075,7 @@ export async function installRemoteMarketplacePluginPackage(slug: string) {
       slug: true,
       source: true,
       channelCode: true,
+      registrySourceId: true,
       packageName: true,
       displayName: true,
       version: true,
@@ -1220,6 +1102,8 @@ export async function installRemoteMarketplacePluginPackage(slug: string) {
     throw new Error("当前远程插件为收费插件，请先记录已购状态后再安装。");
   }
 
+  const version = plugin.latestVersion ?? plugin.version;
+
   const response = await fetch(plugin.downloadUrl, {
     method: "GET",
     cache: "no-store",
@@ -1231,127 +1115,128 @@ export async function installRemoteMarketplacePluginPackage(slug: string) {
   }
 
   const rawPayload = await response.text();
+  try {
+    if (!plugin.checksum) {
+      throw new Error("远程签名插件缺少 checksum，拒绝安装。");
+    }
 
-  // Req 12.1, 19.4: For REMOTE_SIGNED sources, checksum and signature are
-  // mandatory. Reject installs that lack either field.
-  if (!plugin.checksum) {
-    await recordInstallFailure(prisma, plugin, version, "REMOTE_SIGNED plugin is missing checksum. Refusing to install unsigned package.");
-    throw new Error("远程签名插件缺少 checksum，拒绝安装。");
-  }
+    if (!plugin.signature) {
+      throw new Error("远程签名插件缺少 signature，拒绝安装。");
+    }
 
-  if (!plugin.signature) {
-    await recordInstallFailure(prisma, plugin, version, "REMOTE_SIGNED plugin is missing signature. Refusing to install unsigned package.");
-    throw new Error("远程签名插件缺少 signature，拒绝安装。");
-  }
+    assertChecksumMatches(rawPayload, plugin.checksum);
 
-  // Req 12.4: sha256 checksum verification
-  assertChecksumMatches(rawPayload, plugin.checksum);
+    const registrySource = plugin.registrySourceId
+      ? await prisma.pluginRegistrySource.findUnique({
+          where: {
+            id: plugin.registrySourceId,
+          },
+          select: { trustPublicKey: true },
+        })
+      : null;
 
-  // Req 12.2, 19.5: Ed25519 signature verification
-  const registrySource = plugin.checksum
-    ? await prisma.pluginRegistrySource.findFirst({
-        where: {
-          plugins: { some: { slug: plugin.slug } },
-        },
-        select: { trustPublicKey: true },
-      })
-    : null;
+    if (registrySource?.trustPublicKey) {
+      const { verifyEd25519Signature } = await import("@/lib/plugins/signature-verify");
+      const verifyResult = verifyEd25519Signature({
+        rawBytes: rawPayload,
+        signature: plugin.signature,
+        publicKey: registrySource.trustPublicKey,
+      });
 
-  if (registrySource?.trustPublicKey) {
-    const { verifyEd25519Signature } = await import("@/lib/plugins/signature-verify");
-    const verifyResult = verifyEd25519Signature({
-      rawBytes: rawPayload,
-      signature: plugin.signature,
-      publicKey: registrySource.trustPublicKey,
+      if (!verifyResult.valid) {
+        throw new Error(`远程插件包签名校验失败：${verifyResult.errorCode}`);
+      }
+    }
+
+    const bundle = parseRemotePluginPackageBundle(rawPayload);
+    const installPath = path.join(getRuntimePluginInstallRoot(), plugin.slug, version);
+
+    await rm(installPath, { recursive: true, force: true });
+    await mkdir(installPath, { recursive: true });
+    await writeFile(
+      path.join(installPath, "plugin.json"),
+      JSON.stringify(bundle.manifest, null, 2),
+      "utf8",
+    );
+
+    for (const file of bundle.files ?? []) {
+      const relativePath = normalizeBundleRelativePath(file.path);
+      const targetPath = path.join(installPath, relativePath);
+      await mkdir(path.dirname(targetPath), { recursive: true });
+      await writeFile(
+        targetPath,
+        file.encoding === "base64"
+          ? Buffer.from(file.content, "base64")
+          : file.content,
+        file.encoding === "base64" ? undefined : "utf8",
+      );
+    }
+
+    const { manifest, inspection } = await loadPaymentPluginRuntimeInspectionFromManifestPath(
+      path.join(installPath, "plugin.json"),
+      "REMOTE_SIGNED",
+    );
+
+    if (manifest.slug !== plugin.slug) {
+      throw new Error("远程插件包清单里的 slug 与市场目录记录不一致。");
+    }
+
+    if (manifest.channelCode !== plugin.channelCode) {
+      throw new Error("远程插件包清单里的 channelCode 与市场目录记录不一致。");
+    }
+
+    const status: PluginPackageInstallStatus = inspection.definition
+      ? "VALIDATED"
+      : "LOAD_ERROR";
+
+    const installRecord = await prisma.pluginPackageInstall.create({
+      data: {
+        pluginSlug: plugin.slug,
+        sourceId: plugin.registrySourceId,
+        version,
+        downloadUrl: plugin.downloadUrl,
+        installPath,
+        checksum: plugin.checksum,
+        signature: plugin.signature,
+        status,
+        loadError: inspection.loadError,
+      },
     });
 
-    if (!verifyResult.valid) {
-      const errorMsg = `Ed25519 signature verification failed: ${verifyResult.errorCode ?? "unknown"} — ${verifyResult.errorMessage ?? ""}`;
-      await recordInstallFailure(prisma, plugin, version, errorMsg);
-      throw new Error(`远程插件包签名校验失败：${verifyResult.errorCode}`);
-    }
-  }
+    await prisma.marketplacePlugin.update({
+      where: {
+        slug: plugin.slug,
+      },
+      data: {
+        installed: true,
+        enabled: false,
+        installedAt: new Date(),
+        version,
+        metadata: {
+          loadError: inspection.loadError,
+          runnable: inspection.runnable,
+          localPath: path.join(installPath, "plugin.json"),
+          runtimeEntrypoint: manifest.runtimeEntrypoint,
+          runtimePath: manifest.runtimePath,
+          manifestVersion: manifest.manifestVersion,
+        } satisfies Prisma.InputJsonObject,
+      },
+    });
 
-  const bundle = parseRemotePluginPackageBundle(rawPayload);
-  const version = plugin.latestVersion ?? plugin.version;
-  const installPath = path.join(getRuntimePluginInstallRoot(), plugin.slug, version);
-
-  await rm(installPath, { recursive: true, force: true });
-  await mkdir(installPath, { recursive: true });
-  await writeFile(
-    path.join(installPath, "plugin.json"),
-    JSON.stringify(bundle.manifest, null, 2),
-    "utf8",
-  );
-
-  for (const file of bundle.files ?? []) {
-    const relativePath = normalizeBundleRelativePath(file.path);
-    const targetPath = path.join(installPath, relativePath);
-    await mkdir(path.dirname(targetPath), { recursive: true });
-    await writeFile(
-      targetPath,
-      file.encoding === "base64"
-        ? Buffer.from(file.content, "base64")
-        : file.content,
-      file.encoding === "base64" ? undefined : "utf8",
+    return {
+      plugin,
+      installRecord,
+      inspection,
+    };
+  } catch (error) {
+    await recordInstallFailure(
+      prisma,
+      plugin,
+      version,
+      error instanceof Error ? error.message : String(error),
     );
+    throw error;
   }
-
-  const { manifest, inspection } = await loadPaymentPluginRuntimeInspectionFromManifestPath(
-    path.join(installPath, "plugin.json"),
-    "REMOTE_SIGNED",
-  );
-
-  if (manifest.slug !== plugin.slug) {
-    throw new Error("远程插件包清单里的 slug 与市场目录记录不一致。");
-  }
-
-  if (manifest.channelCode !== plugin.channelCode) {
-    throw new Error("远程插件包清单里的 channelCode 与市场目录记录不一致。");
-  }
-
-  const status: PluginPackageInstallStatus = inspection.definition
-    ? "VALIDATED"
-    : "LOAD_ERROR";
-
-  const installRecord = await prisma.pluginPackageInstall.create({
-    data: {
-      pluginSlug: plugin.slug,
-      version,
-      downloadUrl: plugin.downloadUrl,
-      installPath,
-      checksum: plugin.checksum,
-      signature: plugin.signature,
-      status,
-      loadError: inspection.loadError,
-    },
-  });
-
-  await prisma.marketplacePlugin.update({
-    where: {
-      slug: plugin.slug,
-    },
-    data: {
-      installed: true,
-      enabled: false,
-      installedAt: new Date(),
-      version,
-      metadata: {
-        loadError: inspection.loadError,
-        runnable: inspection.runnable,
-        localPath: path.join(installPath, "plugin.json"),
-        runtimeEntrypoint: manifest.runtimeEntrypoint,
-        runtimePath: manifest.runtimePath,
-        manifestVersion: manifest.manifestVersion,
-      } satisfies Prisma.InputJsonObject,
-    },
-  });
-
-  return {
-    plugin,
-    installRecord,
-    inspection,
-  };
 }
 
 export async function markMarketplacePluginPurchased(slug: string) {
@@ -1389,6 +1274,7 @@ export async function markMarketplacePluginPurchased(slug: string) {
 
 export async function recordMarketplacePluginPurchase(input: {
   slug: string;
+  merchantId?: string | null;
   purchasedBy?: string | null;
   orderReference?: string | null;
   licenseKey?: string | null;
@@ -1422,6 +1308,7 @@ export async function recordMarketplacePluginPurchase(input: {
     getPrismaClient().pluginPurchaseRecord.create({
       data: {
         pluginSlug: plugin.slug,
+        merchantId: input.merchantId ?? null,
         sourceId: plugin.registrySourceId,
         orderReference: input.orderReference ?? null,
         licenseKey: input.licenseKey ?? null,
@@ -1464,6 +1351,7 @@ export async function purchaseAndIssueLicense(input: {
   merchantId?: string | null;
   purchasedBy?: string | null;
   orderReference?: string | null;
+  markPluginPurchased?: boolean;
 }): Promise<{
   success: boolean;
   reason?: string;
@@ -1522,6 +1410,7 @@ export async function purchaseAndIssueLicense(input: {
     const failureRecord = await prisma.pluginPurchaseRecord.create({
       data: {
         pluginSlug: plugin.slug,
+        merchantId: input.merchantId ?? null,
         sourceId: plugin.registrySourceId,
         orderReference: input.orderReference ?? null,
         licenseKey: null,
@@ -1540,29 +1429,35 @@ export async function purchaseAndIssueLicense(input: {
   }
 
   const licenseIssuedAt = new Date(verifyResult.claims.iat * 1000);
-  const [record] = await prisma.$transaction([
-    prisma.pluginPurchaseRecord.create({
-      data: {
-        pluginSlug: plugin.slug,
-        sourceId: plugin.registrySourceId,
-        orderReference: input.orderReference ?? null,
-        licenseKey: input.licenseKey,
-        licenseKeyHash: verifyResult.licenseKeyHash,
-        licenseExpiresAt: verifyResult.licenseExpiresAt,
-        verifiedAt: new Date(),
-        priceLabel: plugin.priceLabel,
-        purchaseUrl: plugin.purchaseUrl,
-        notes: null,
-        purchasedBy: input.purchasedBy ?? null,
-      },
-    }),
-    prisma.marketplacePlugin.update({
-      where: { slug: plugin.slug },
-      data: {
-        purchasedAt: licenseIssuedAt,
-      },
-    }),
-  ]);
+  const purchaseCreate = prisma.pluginPurchaseRecord.create({
+    data: {
+      pluginSlug: plugin.slug,
+      merchantId: input.merchantId ?? null,
+      sourceId: plugin.registrySourceId,
+      orderReference: input.orderReference ?? null,
+      licenseKey: input.licenseKey,
+      licenseKeyHash: verifyResult.licenseKeyHash,
+      licenseExpiresAt: verifyResult.licenseExpiresAt,
+      verifiedAt: new Date(),
+      priceLabel: plugin.priceLabel,
+      purchaseUrl: plugin.purchaseUrl,
+      notes: null,
+      purchasedBy: input.purchasedBy ?? null,
+    },
+  });
+
+  const [record] =
+    input.markPluginPurchased !== false
+      ? await prisma.$transaction([
+          purchaseCreate,
+          prisma.marketplacePlugin.update({
+            where: { slug: plugin.slug },
+            data: {
+              purchasedAt: licenseIssuedAt,
+            },
+          }),
+        ])
+      : await prisma.$transaction([purchaseCreate]);
 
   return { success: true, record: { id: record.id } };
 }
@@ -1649,7 +1544,7 @@ export async function listMerchantMarketplacePaymentPlugins(
   locale: Locale = "zh",
 ): Promise<MerchantMarketplacePaymentPluginRecord[]> {
   await syncMerchantInstalledPluginsFromUsage(merchantId);
-  const [plugins, installedRows] = await Promise.all([
+  const [plugins, installedRows, purchaseRows] = await Promise.all([
     listMarketplacePaymentPlugins(locale),
     getPrismaClient().merchantInstalledPlugin.findMany({
       where: {
@@ -1660,9 +1555,22 @@ export async function listMerchantMarketplacePaymentPlugins(
         installedAt: true,
       },
     }),
+    getPrismaClient().pluginPurchaseRecord.findMany({
+      where: {
+        merchantId,
+      },
+      select: {
+        pluginSlug: true,
+        purchasedAt: true,
+      },
+      orderBy: [{ purchasedAt: "desc" }],
+    }),
   ]);
   const merchantInstalledBySlug = new Map(
     installedRows.map((row) => [row.pluginSlug, row.installedAt]),
+  );
+  const merchantPurchasedBySlug = new Map(
+    purchaseRows.map((row) => [row.pluginSlug, row.purchasedAt]),
   );
 
   return plugins
@@ -1671,6 +1579,8 @@ export async function listMerchantMarketplacePaymentPlugins(
       ...plugin,
       merchantInstalled: merchantInstalledBySlug.has(plugin.slug),
       merchantInstalledAt: merchantInstalledBySlug.get(plugin.slug) ?? null,
+      merchantPurchased: merchantPurchasedBySlug.has(plugin.slug),
+      merchantPurchasedAt: merchantPurchasedBySlug.get(plugin.slug) ?? null,
     }));
 }
 
@@ -1734,6 +1644,7 @@ export async function installMerchantMarketplacePlugin(input: {
     const purchaseRecord = await prisma.pluginPurchaseRecord.findFirst({
       where: {
         pluginSlug: plugin.slug,
+        merchantId: input.merchantId,
         licenseKey: { not: null },
         verifiedAt: { not: null },
       },
@@ -1856,37 +1767,52 @@ export async function isMerchantPaymentPluginInstalled(
   merchantId: string,
   channelCode: string,
 ) {
-  await syncMerchantInstalledPluginsFromUsage(merchantId);
-  const platformPlugin = await getPrismaClient().marketplacePlugin.findFirst({
+  try {
+    await syncMerchantInstalledPluginsFromUsage(merchantId);
+  } catch {
+    // For local dev and bridge checkout flows, remote registry sync failures
+    // (such as trust-key drift) should not invalidate already-installed
+    // built-in payment plugins for the merchant.
+  }
+  const platformPlugins = await getPrismaClient().marketplacePlugin.findMany({
     where: {
       channelCode,
       kind: PAYMENT_PLUGIN_KIND,
     },
+    orderBy: [
+      { source: "asc" },
+      { installed: "desc" },
+      { enabled: "desc" },
+      { createdAt: "asc" },
+    ],
     select: {
       slug: true,
+      source: true,
       installed: true,
       enabled: true,
     },
   });
 
-  if (!platformPlugin) {
+  if (platformPlugins.length === 0) {
     return false;
   }
 
-  const merchantPlugin = await getPrismaClient().merchantInstalledPlugin.findUnique({
+  const merchantPlugins = await getPrismaClient().merchantInstalledPlugin.findMany({
     where: {
-      merchantId_pluginSlug: {
-        merchantId,
-        pluginSlug: platformPlugin.slug,
+      merchantId,
+      pluginSlug: {
+        in: platformPlugins.map((plugin) => plugin.slug),
       },
     },
     select: {
-      id: true,
+      pluginSlug: true,
     },
   });
 
-  return Boolean(
-    platformPlugin.installed && platformPlugin.enabled && merchantPlugin?.id,
+  const installedSlugs = new Set(merchantPlugins.map((plugin) => plugin.pluginSlug));
+
+  return platformPlugins.some(
+    (plugin) => plugin.installed && plugin.enabled && installedSlugs.has(plugin.slug),
   );
 }
 
@@ -1958,16 +1884,17 @@ export async function setMarketplacePluginEnabledState(input: {
 export async function getActivePaymentProvider(
   channelCode: string,
 ): Promise<PaymentProvider | null> {
-  await syncBuiltinMarketplacePlugins();
-  const localDefinitions = await loadLocalPaymentPluginDefinitionsMap();
-  const plugin =
-    getPaymentPlugin(channelCode) ??
-    localDefinitions.get(channelCode)?.definition ??
-    null;
-
-  if (!plugin) {
-    return null;
+  // Prefer built-in payment providers for core checkout execution so
+  // temporary remote registry trust mismatches do not break the main-site
+  // payment order pipeline itself.
+  const builtinPlugin = getPaymentPlugin(channelCode);
+  if (builtinPlugin) {
+    return builtinPlugin.provider;
   }
+
+  await syncBuiltinMarketplacePlugins();
+  const remoteDefinitions = await loadRemoteInstalledPaymentPluginDefinitionsMap();
+  const plugin = remoteDefinitions.get(channelCode)?.inspection.definition ?? null;
 
   const row = await getPrismaClient().marketplacePlugin.findFirst({
     where: {
@@ -1984,7 +1911,7 @@ export async function getActivePaymentProvider(
     return null;
   }
 
-  return plugin.provider;
+  return plugin?.provider ?? null;
 }
 
 export async function listInstalledPaymentChannels() {
@@ -2061,10 +1988,10 @@ export async function getInstalledMerchantChannelTemplate(
 ): Promise<MerchantChannelTemplate | null> {
   try {
     await syncBuiltinMarketplacePlugins();
-    const localDefinitions = await loadLocalPaymentPluginDefinitionsMap();
+    const remoteDefinitions = await loadRemoteInstalledPaymentPluginDefinitionsMap();
     const plugin =
+      remoteDefinitions.get(channelCode)?.inspection.definition ??
       getPaymentPlugin(channelCode) ??
-      localDefinitions.get(channelCode)?.definition ??
       null;
 
     if (!plugin) {
@@ -2105,10 +2032,10 @@ export async function getMerchantInstalledMerchantChannelTemplate(
       return null;
     }
 
-    const localDefinitions = await loadLocalPaymentPluginDefinitionsMap();
+    const remoteDefinitions = await loadRemoteInstalledPaymentPluginDefinitionsMap();
     const plugin =
+      remoteDefinitions.get(channelCode)?.inspection.definition ??
       getPaymentPlugin(channelCode) ??
-      localDefinitions.get(channelCode)?.definition ??
       null;
     return plugin ? resolveMerchantChannelTemplate(plugin, locale) : null;
   } catch {

@@ -55,6 +55,7 @@ export default async function MerchantDashboardPage({
     profileMissingFields,
     isProfileComplete,
     hasConfiguredBusinessCallback,
+    hasAnyChannelAccount,
     hasEnabledChannelAccount,
     checkoutTestChannels,
   } = await loadMerchantDashboardData(searchParams, { locale });
@@ -66,6 +67,7 @@ export default async function MerchantDashboardPage({
           headerDesc:
             "This page is now the executive summary for the merchant workspace. Detailed integration, profile, and credential operations are separated into dedicated pages on the left navigation.",
           integration: "Integration",
+          plugins: "Plugin Market",
           profile: "Merchant Profile",
           credentials: "API Credentials",
           channels: "Channels",
@@ -90,6 +92,11 @@ export default async function MerchantDashboardPage({
           workstreamsDesc:
             "The left navigation now separates merchant work into focused pages so operators do not need to scan one oversized dashboard.",
           workstreams: [
+            {
+              href: "/merchant/plugins",
+              title: "Plugin Market",
+              desc: "Install only the payment plugins this merchant actually needs before creating channel instances.",
+            },
             {
               href: "/merchant/integration",
               title: "Integration",
@@ -135,6 +142,14 @@ export default async function MerchantDashboardPage({
           operationalDesc:
             "These cards tell the merchant what is already ready and which dedicated page to visit next.",
           operationalCards: [
+            {
+              title: "Plugin selection",
+              status: hasAnyChannelAccount ? "ready" : "pending",
+              desc: hasAnyChannelAccount
+                ? "This merchant already has installed plugins in active use."
+                : "Install the payment plugins this merchant needs first, then continue with channel configuration.",
+              href: "/merchant/plugins",
+            },
             {
               title: "Integration handoff",
               status: activeCredentialCount > 0 ? "ready" : "pending",
@@ -212,6 +227,7 @@ export default async function MerchantDashboardPage({
           headerDesc:
             "当前页面只保留商户工作台摘要信息，接入参数、商户配置和 API 凭证已经拆分到左侧子路由中，避免所有内容堆在同一页。",
           integration: "接入参数",
+          plugins: "插件市场",
           profile: "商户配置",
           credentials: "API 凭证",
           channels: "支付通道",
@@ -236,6 +252,11 @@ export default async function MerchantDashboardPage({
           workstreamsDesc:
             "左侧导航已经拆分成独立子页面，商户不需要再在一个超长页面里寻找接入配置和凭证管理入口。",
           workstreams: [
+            {
+              href: "/merchant/plugins",
+              title: "插件市场",
+              desc: "先安装当前商户真正需要的支付插件，再创建对应通道实例。",
+            },
             {
               href: "/merchant/integration",
               title: "接入参数",
@@ -280,6 +301,14 @@ export default async function MerchantDashboardPage({
           operationalTitle: "当前接入状态总览",
           operationalDesc: "下面这些卡片用来快速判断当前哪些能力已经准备好，以及下一步该进入哪个独立页面。",
           operationalCards: [
+            {
+              title: "插件选择",
+              status: hasAnyChannelAccount ? "ready" : "pending",
+              desc: hasAnyChannelAccount
+                ? "当前商户已经有处于使用中的已安装插件。"
+                : "请先安装当前商户需要的支付插件，再继续配置支付通道。",
+              href: "/merchant/plugins",
+            },
             {
               title: "接入交付",
               status: activeCredentialCount > 0 ? "ready" : "pending",
@@ -403,6 +432,11 @@ export default async function MerchantDashboardPage({
             <Link href="/merchant/integration" className={actionButtonClass}>
               {content.integration}
             </Link>
+            {canReadChannels ? (
+              <Link href="/merchant/plugins" className={actionButtonClass}>
+                {content.plugins}
+              </Link>
+            ) : null}
             <Link href="/merchant/profile" className={actionButtonClass}>
               {content.profile}
             </Link>
@@ -483,14 +517,14 @@ export default async function MerchantDashboardPage({
         <div className="mt-6 grid gap-4 xl:grid-cols-4">
           {content.workstreams
             .filter((item) => {
-              if (item.href === "/merchant/channels") {
+              if (item.href === "/merchant/channels" || item.href === "/merchant/plugins") {
                 return canReadChannels;
               }
               return true;
             })
             .map((item) => (
               <article
-                key={item.href}
+                key={`${item.href}-${item.title}`}
                 className="rounded-[1.25rem] border border-line bg-white/80 p-4"
               >
                 <h3 className="text-base font-semibold text-foreground">{item.title}</h3>
@@ -522,14 +556,14 @@ export default async function MerchantDashboardPage({
         <div className="mt-6 grid gap-4 xl:grid-cols-4">
           {content.operationalCards
             .filter((item) => {
-              if (item.href === "/merchant/channels") {
+              if (item.href === "/merchant/channels" || item.href === "/merchant/plugins") {
                 return canReadChannels;
               }
               return true;
             })
             .map((item) => (
             <article
-              key={item.href}
+              key={`${item.href}-${item.title}`}
               className="rounded-[1.25rem] border border-line bg-white/80 p-4"
             >
               <div className="flex items-start justify-between gap-3">

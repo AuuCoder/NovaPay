@@ -63,3 +63,8 @@ next-env.d.ts
 /uploads
 /storage
 /tmp
+
+# registry runtime / dev artifacts
+/.tmp
+/apps/registry/.tmp
+/artifacts

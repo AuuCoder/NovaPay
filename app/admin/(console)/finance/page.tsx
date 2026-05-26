@@ -1,4 +1,5 @@
 import {
+  buildPageHref,
   formatDateTime,
   formatMoney,
   getSettlementStatusLabel,
@@ -160,6 +161,8 @@ export default async function AdminFinancePage({
           amountCol: "Amount",
           referenceCol: "Reference",
           descriptionCol: "Description",
+          pluginButton: "Open Plugin",
+          channelPrefix: "Channel",
         }
       : {
           eyebrow: "Finance",
@@ -222,6 +225,8 @@ export default async function AdminFinancePage({
           amountCol: "金额",
           referenceCol: "关联单据",
           descriptionCol: "说明",
+          pluginButton: "查看插件",
+          channelPrefix: "通道",
         };
   const dateFrom = parseDateStart(filters.dateFrom);
   const dateTo = parseDateEnd(filters.dateTo);
@@ -264,6 +269,12 @@ export default async function AdminFinancePage({
             select: {
               id: true,
               externalRefundId: true,
+              paymentOrder: {
+                select: {
+                  externalOrderId: true,
+                  channelCode: true,
+                },
+              },
             },
           },
           settlement: {
@@ -744,12 +755,50 @@ export default async function AdminFinancePage({
                         {entry.paymentRefund ? (
                           <>
                             <p className="font-mono text-foreground">{entry.paymentRefund.externalRefundId}</p>
-                            <p className="mt-1">{entry.paymentOrder?.externalOrderId ?? "—"}</p>
+                            <p className="mt-1">
+                              {entry.paymentRefund.paymentOrder?.externalOrderId ??
+                                entry.paymentOrder?.externalOrderId ??
+                                "—"}
+                            </p>
+                            {(entry.paymentRefund.paymentOrder?.channelCode ??
+                              entry.paymentOrder?.channelCode) ? (
+                              <div className="mt-2">
+                                <p>
+                                  {content.channelPrefix}{" "}
+                                  {entry.paymentRefund.paymentOrder?.channelCode ??
+                                    entry.paymentOrder?.channelCode}
+                                </p>
+                                <a
+                                  href={buildPageHref(
+                                    "/admin/plugins",
+                                    {
+                                      channelCode:
+                                        entry.paymentRefund.paymentOrder?.channelCode ??
+                                        entry.paymentOrder?.channelCode,
+                                    },
+                                    1,
+                                  )}
+                                  className="mt-2 inline-flex rounded-xl border border-line bg-white px-2.5 py-1.5 text-[11px] font-medium text-foreground"
+                                >
+                                  {content.pluginButton}
+                                </a>
+                              </div>
+                            ) : null}
                           </>
                         ) : entry.paymentOrder ? (
                           <>
                             <p className="font-mono text-foreground">{entry.paymentOrder.externalOrderId}</p>
                             <p className="mt-1">{entry.paymentOrder.channelCode}</p>
+                            <a
+                              href={buildPageHref(
+                                "/admin/plugins",
+                                { channelCode: entry.paymentOrder.channelCode },
+                                1,
+                              )}
+                              className="mt-2 inline-flex rounded-xl border border-line bg-white px-2.5 py-1.5 text-[11px] font-medium text-foreground"
+                            >
+                              {content.pluginButton}
+                            </a>
                           </>
                         ) : entry.settlement ? (
                           <>

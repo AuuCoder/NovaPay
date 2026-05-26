@@ -9,6 +9,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getRegistryRuntime } from "../../../../../lib/runtime/state";
 import { requireConsumer } from "../../../../../lib/auth/require-consumer";
+import { apiError } from "../../../../../lib/api/response";
 
 export const runtime = "nodejs";
 
@@ -24,36 +25,42 @@ export async function GET(
   const order = await state.orderStore.findById(orderId);
 
   if (!order) {
-    return NextResponse.json(
-      { error: "ORDER_NOT_FOUND", message: `No order with id: ${orderId}` },
-      { status: 404 },
-    );
+    return apiError(request, "ORDER_NOT_FOUND", 404, { orderId });
   }
 
-  // If the order is PAID, look up the license JWS from the demo bundles
-  // (in production this would query the License table).
+  // If the order is PAID, prefer the persisted license record. Fallback to
+  // on-demand reissue for older dev snapshots created before license storage
+  // was wired up.
   let license: { licenseKey: string; licenseKeyHash: string; expiresAt: string | null } | null = null;
 
   if (order.state === "PAID" && order.licenseId) {
-    // For the in-memory dev store, we re-issue a fresh license on demand.
-    // Production stores the JWS in the License table and returns it directly.
-    const { issueLicense } = await import("../../../../../lib/licensing/issuer");
-    const issued = await issueLicense(
-      {
-        pluginSlug: order.pluginSlug,
-        version: order.version,
-        pricingPlanKind: order.pricingPlanKind,
-        instanceId: order.buyerInstanceId,
-        merchantId: order.buyerMerchantId ?? undefined,
-      },
-      state.signer,
-      state.keyStore,
-    );
-    license = {
-      licenseKey: issued.jwsCompact,
-      licenseKeyHash: issued.licenseKeyHash,
-      expiresAt: null,
-    };
+    const persisted = await state.licenseStore.findById(order.licenseId);
+
+    if (persisted) {
+      license = {
+        licenseKey: persisted.jwsCompact,
+        licenseKeyHash: persisted.licenseKeyHash,
+        expiresAt: persisted.expiresAt?.toISOString() ?? null,
+      };
+    } else {
+      const { issueLicense } = await import("../../../../../lib/licensing/issuer");
+      const issued = await issueLicense(
+        {
+          pluginSlug: order.pluginSlug,
+          version: order.version,
+          pricingPlanKind: order.pricingPlanKind,
+          instanceId: order.buyerInstanceId,
+          merchantId: order.buyerMerchantId ?? undefined,
+        },
+        state.signer,
+        state.keyStore,
+      );
+      license = {
+        licenseKey: issued.jwsCompact,
+        licenseKeyHash: issued.licenseKeyHash,
+        expiresAt: null,
+      };
+    }
   }
 
   return NextResponse.json({

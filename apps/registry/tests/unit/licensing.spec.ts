@@ -12,8 +12,12 @@ import { issueLicense } from "../../lib/licensing/issuer";
 import { verifyLicense } from "../../lib/licensing/verifier";
 import {
   createInMemoryRevocationStore,
+  createPersistentRevocationStore,
   revokeLicense,
 } from "../../lib/licensing/revocation";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 async function setupSigningEnvironment() {
   const keyStore = createInMemorySigningKeyStore();
@@ -38,7 +42,7 @@ describe("license issuer + verifier", () => {
     const { keyStore, signer } = await setupSigningEnvironment();
     const issued = await issueLicense(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         pricingPlanKind: "PER_INSTANCE_ONE_TIME",
         instanceId: "inst-abc",
@@ -51,7 +55,7 @@ describe("license issuer + verifier", () => {
     const result = await verifyLicense(
       {
         jwsCompact: issued.jwsCompact,
-        expectedSlug: "remote.demo",
+        expectedSlug: "thirdparty.sample-pay",
         expectedVersion: "0.1.0",
         expectedInstanceId: "inst-abc",
       },
@@ -60,7 +64,7 @@ describe("license issuer + verifier", () => {
 
     assert.equal(result.valid, true);
     if (result.valid) {
-      assert.equal(result.claims.pluginSlug, "remote.demo");
+      assert.equal(result.claims.pluginSlug, "thirdparty.sample-pay");
       assert.equal(result.claims.scope, "INSTANCE");
       assert.equal(result.signingKeyId, issued.signingKeyId);
     }
@@ -70,7 +74,7 @@ describe("license issuer + verifier", () => {
     const { keyStore, signer } = await setupSigningEnvironment();
     const issued = await issueLicense(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         pricingPlanKind: "PER_INSTANCE_ONE_TIME",
         instanceId: "inst-A",
@@ -97,7 +101,7 @@ describe("license issuer + verifier", () => {
     const { keyStore, signer } = await setupSigningEnvironment();
     const issued = await issueLicense(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         pricingPlanKind: "PER_MERCHANT_SUBSCRIPTION",
         instanceId: "inst-A",
@@ -125,7 +129,7 @@ describe("license issuer + verifier", () => {
     const { keyStore, signer } = await setupSigningEnvironment();
     const issued = await issueLicense(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         pricingPlanKind: "PER_INSTANCE_ONE_TIME",
         instanceId: "inst-A",
@@ -149,7 +153,7 @@ describe("license issuer + verifier", () => {
     const { keyStore, signer } = await setupSigningEnvironment();
     const issued = await issueLicense(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         pricingPlanKind: "PER_INSTANCE_ONE_TIME",
         instanceId: "inst-A",
@@ -179,11 +183,39 @@ describe("license issuer + verifier", () => {
     if (!result.valid) assert.equal(result.reason, "REVOKED");
   });
 
+  it("fails with UNKNOWN_LICENSE when the signed token was never issued by the registry store", async () => {
+    const { keyStore, signer } = await setupSigningEnvironment();
+    const issued = await issueLicense(
+      {
+        pluginSlug: "thirdparty.sample-pay",
+        version: "0.1.0",
+        pricingPlanKind: "PER_INSTANCE_ONE_TIME",
+        instanceId: "inst-A",
+      },
+      signer,
+      keyStore,
+    );
+
+    const result = await verifyLicense(
+      { jwsCompact: issued.jwsCompact },
+      keyStore,
+      undefined,
+      {
+        async findById() {
+          return null;
+        },
+      },
+    );
+
+    assert.equal(result.valid, false);
+    if (!result.valid) assert.equal(result.reason, "UNKNOWN_LICENSE");
+  });
+
   it("fails with SIGNATURE_INVALID when the JWS is tampered", async () => {
     const { keyStore, signer } = await setupSigningEnvironment();
     const issued = await issueLicense(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         version: "0.1.0",
         pricingPlanKind: "PER_INSTANCE_ONE_TIME",
         instanceId: "inst-A",
@@ -256,5 +288,32 @@ describe("revocation store", () => {
     );
     assert.equal(second.success, false);
     assert.equal(second.errorCode, "ALREADY_REVOKED");
+  });
+
+  it("persists revocations across store re-instantiation", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "nvreg-revocations-"));
+    const filePath = path.join(tempDir, "revocations.json");
+
+    try {
+      const store = createPersistentRevocationStore(filePath);
+      const first = await revokeLicense(
+        {
+          licenseId: "lic-1",
+          licenseKeyHash: "deadbeef",
+          reason: "test",
+          revokedById: "admin-1",
+        },
+        store,
+      );
+      assert.equal(first.success, true);
+
+      const reloaded = createPersistentRevocationStore(filePath);
+      assert.equal(await reloaded.isRevoked("deadbeef"), true);
+      const listed = await reloaded.list();
+      assert.equal(listed.length, 1);
+      assert.equal(listed[0]?.licenseId, "lic-1");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

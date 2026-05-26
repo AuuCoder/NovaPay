@@ -3,6 +3,7 @@ import { createMerchantAction, reviewMerchantAction } from "@/app/admin/actions"
 import {
   buildPageHref,
   formatDateTime,
+  getActivePaymentChannelOptions,
   getPaginationState,
   getMerchantStatusLabel,
   getMerchantStatusTone,
@@ -43,13 +44,15 @@ export default async function MerchantsPage({
   const prisma = getPrismaClient();
   const canReview = hasPermission(session.adminUser.role, "merchant:write");
   const locale = await getCurrentLocale();
-  const [messages, filters] = await Promise.all([
+  const [messages, filters, paymentChannelOptions] = await Promise.all([
     readPageMessages(searchParams),
-    readSearchFilters(searchParams, ["q", "callback", "status", "page"]),
+    readSearchFilters(searchParams, ["q", "callback", "status", "channelCode", "page"]),
+    getActivePaymentChannelOptions(locale),
   ]);
   const keyword = filters.q;
   const callback = filters.callback;
   const status = filters.status;
+  const channelCode = filters.channelCode;
   const requestedPage = parsePageParam(filters.page);
   const content =
     locale === "en"
@@ -92,6 +95,7 @@ export default async function MerchantsPage({
           keyword: "Keyword",
           keywordPlaceholder: "Search merchant code or name",
           callbackStatus: "Business Callback",
+          channelLabel: "Channel",
           all: "All",
           callbackEnabled: "Enabled",
           callbackDisabled: "Disabled",
@@ -183,6 +187,7 @@ export default async function MerchantsPage({
           keyword: "关键词",
           keywordPlaceholder: "搜索商户编码或名称",
           callbackStatus: "业务回调",
+          channelLabel: "通道",
           all: "全部",
           callbackEnabled: "已启用",
           callbackDisabled: "已停用",
@@ -235,24 +240,51 @@ export default async function MerchantsPage({
           suspend: "暂停",
           reapprove: "重新通过",
         };
-  const where = {
+  const whereClauses = [
     ...(keyword
-      ? {
-          OR: [
-            { code: { contains: keyword, mode: "insensitive" as const } },
-            { name: { contains: keyword, mode: "insensitive" as const } },
-            { legalName: { contains: keyword, mode: "insensitive" as const } },
-            { contactEmail: { contains: keyword, mode: "insensitive" as const } },
-          ],
-        }
-      : {}),
+      ? [
+          {
+            OR: [
+              { code: { contains: keyword, mode: "insensitive" as const } },
+              { name: { contains: keyword, mode: "insensitive" as const } },
+              { legalName: { contains: keyword, mode: "insensitive" as const } },
+              { contactEmail: { contains: keyword, mode: "insensitive" as const } },
+            ],
+          },
+        ]
+      : []),
     ...(callback === "enabled"
-      ? { callbackEnabled: true }
+      ? [{ callbackEnabled: true }]
       : callback === "disabled"
-        ? { callbackEnabled: false }
-        : {}),
-    ...(status ? { status: status as "PENDING" | "APPROVED" | "REJECTED" | "SUSPENDED" } : {}),
-  };
+        ? [{ callbackEnabled: false }]
+        : []),
+    ...(status
+      ? [{ status: status as "PENDING" | "APPROVED" | "REJECTED" | "SUSPENDED" }]
+      : []),
+    ...(channelCode
+      ? [
+          {
+            OR: [
+              {
+                channelBindings: {
+                  some: {
+                    channelCode,
+                  },
+                },
+              },
+              {
+                channelAccounts: {
+                  some: {
+                    channelCode,
+                  },
+                },
+              },
+            ],
+          },
+        ]
+      : []),
+  ];
+  const where = whereClauses.length > 0 ? { AND: whereClauses } : {};
   const [
     merchantCount,
     callbackEnabledCount,
@@ -318,6 +350,7 @@ export default async function MerchantsPage({
     q: keyword,
     callback,
     status,
+    channelCode,
   };
   const currentPageHref = buildPageHref("/admin/merchants", baseFilters, currentPage);
 
@@ -453,6 +486,16 @@ export default async function MerchantsPage({
                 <option value="APPROVED">{getMerchantStatusLabel("APPROVED", locale)}</option>
                 <option value="REJECTED">{getMerchantStatusLabel("REJECTED", locale)}</option>
                 <option value="SUSPENDED">{getMerchantStatusLabel("SUSPENDED", locale)}</option>
+              </select>
+            </LabeledField>
+            <LabeledField label={content.channelLabel}>
+              <select name="channelCode" defaultValue={channelCode} className={selectClass}>
+                <option value="">{content.all}</option>
+                {paymentChannelOptions.map((channel) => (
+                  <option key={channel.code} value={channel.code}>
+                    {channel.code}
+                  </option>
+                ))}
               </select>
             </LabeledField>
             <div className="flex items-end">

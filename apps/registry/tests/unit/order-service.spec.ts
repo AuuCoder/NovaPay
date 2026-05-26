@@ -11,6 +11,7 @@ import { createSigner } from "../../lib/signing/signer";
 import {
   createInMemoryOrderStore,
   createPluginOrder,
+  markOrderRefunded,
   markOrderPaidAndIssueLicense,
 } from "../../lib/payments/order-service";
 import { createInMemoryBalanceLedger } from "../../lib/payouts/balance-ledger";
@@ -40,7 +41,7 @@ describe("order service", () => {
     const deps = await setupDeps();
     const order = await createPluginOrder(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         pluginId: "plg-1",
         developerId: "dev-1",
         version: "0.1.0",
@@ -61,7 +62,7 @@ describe("order service", () => {
     const deps = await setupDeps();
     const order = await createPluginOrder(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         pluginId: "plg-1",
         developerId: "dev-1",
         version: "0.1.0",
@@ -95,7 +96,7 @@ describe("order service", () => {
     const deps = await setupDeps();
     const order = await createPluginOrder(
       {
-        pluginSlug: "remote.demo",
+        pluginSlug: "thirdparty.sample-pay",
         pluginId: "plg-1",
         developerId: "dev-1",
         version: "0.1.0",
@@ -118,5 +119,41 @@ describe("order service", () => {
         ),
       /already marked PAID/,
     );
+  });
+
+  it("reverses developer revenue when an order is refunded", async () => {
+    const deps = await setupDeps();
+    const order = await createPluginOrder(
+      {
+        pluginSlug: "thirdparty.sample-pay",
+        pluginId: "plg-1",
+        developerId: "dev-1",
+        version: "0.1.0",
+        buyerInstanceId: "inst-A",
+        pricingPlanKind: "PER_INSTANCE_ONE_TIME",
+        priceAmountCents: 10000,
+        priceCurrency: "CNY",
+      },
+      deps,
+    );
+
+    await markOrderPaidAndIssueLicense(
+      {
+        orderId: order.id,
+        novapayOrderId: "np-12345",
+      },
+      { ...deps, developerRevenueSharePercent: 70 },
+    );
+
+    const refunded = await markOrderRefunded(
+      { orderId: order.id },
+      { ...deps, developerRevenueSharePercent: 70 },
+    );
+
+    assert.equal(refunded.state, "REFUNDED");
+
+    const balance = await deps.ledger.getBalance("dev-1", "CNY");
+    assert.equal(balance.total, 0);
+    assert.equal(balance.available, 0);
   });
 });

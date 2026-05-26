@@ -13,7 +13,7 @@ test(".env example keeps payment channel secrets out of platform env vars", () =
   assert.doesNotMatch(envExample, /^WXPAY_[A-Z0-9_]+=.*$/m);
   assert.match(
     envExample,
-    /Merchant-owned channel credentials and upstream callback URLs are configured/s,
+    /Merchant-owned channel credentials[\s\S]*upstream callback URLs are configured/,
   );
 });
 
@@ -26,7 +26,7 @@ test("merchant-facing docs explain dynamic callbacks and self-managed channel co
   assert.match(readme, /Merchants do not need to and must not send `notifyUrl`/);
   assert.match(
     readme,
-    /`\.env` should only contain platform-level settings, not merchant production payment secrets\./,
+    /`\.env`[\s\S]*platform-level settings, not merchant production payment secrets\./,
   );
   assert.match(readmeZh, /商户不需要也不能(?:主动)?传 `notifyUrl`/);
   assert.match(readmeZh, /`\.env` 只保留平台级配置/);

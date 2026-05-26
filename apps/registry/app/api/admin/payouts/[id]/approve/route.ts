@@ -3,6 +3,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
+import { requireRegistryAdminRequest } from "../../../../../../lib/auth/session";
 import { getRegistryRuntime } from "../../../../../../lib/runtime/state";
 
 export const runtime = "nodejs";
@@ -11,6 +12,11 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const auth = await requireRegistryAdminRequest(request);
+  if (auth.response) {
+    return auth.response;
+  }
+
   const { id } = await params;
   let body: Record<string, unknown> = {};
   try {

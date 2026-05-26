@@ -9,6 +9,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getRegistryRuntime } from "../../../../../lib/runtime/state";
 import { requireConsumer } from "../../../../../lib/auth/require-consumer";
+import { apiError } from "../../../../../lib/api/response";
 
 export const runtime = "nodejs";
 
@@ -23,10 +24,7 @@ export async function GET(
   const state = await getRegistryRuntime();
   const entry = state.catalog.find((p) => p.slug === slug);
   if (!entry) {
-    return NextResponse.json(
-      { error: "PLUGIN_NOT_FOUND", message: `No plugin found with slug: ${slug}` },
-      { status: 404 },
-    );
+    return apiError(request, "PLUGIN_NOT_FOUND", 404, { slug });
   }
 
   const url = new URL(request.url);

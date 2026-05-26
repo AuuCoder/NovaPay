@@ -1,18 +1,38 @@
 "use client";
 
-import { useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { LOCALE_COOKIE_NAME, type Locale } from "@/lib/i18n";
 import { useRouter } from "next/navigation";
 
 export function LanguageSwitcher({ locale }: { locale: Locale }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [isOpen]);
 
   function switchLocale(nextLocale: Locale) {
     if (nextLocale === locale) {
       return;
     }
 
+    setIsOpen(false);
     document.cookie = `${LOCALE_COOKIE_NAME}=${nextLocale}; path=/; max-age=31536000; samesite=lax`;
     startTransition(() => {
       router.refresh();
@@ -20,29 +40,64 @@ export function LanguageSwitcher({ locale }: { locale: Locale }) {
   }
 
   return (
-    <div className="fixed right-4 top-4 z-50 flex items-center gap-1 rounded-full border border-line bg-white/90 p-1 shadow-[0_12px_36px_rgba(79,46,17,0.12)] backdrop-blur">
+    <div
+      ref={containerRef}
+      className="app-locale-switcher"
+    >
       <button
         type="button"
-        onClick={() => switchLocale("zh")}
-        aria-pressed={locale === "zh"}
+        aria-label={locale === "en" ? "Switch language" : "切换语言"}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
         disabled={isPending}
-        className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-          locale === "zh" ? "bg-foreground text-white" : "text-foreground hover:bg-panel"
-        }`}
+        onClick={() => setIsOpen((value) => !value)}
+        className="app-locale-icon-button"
       >
-        中文
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          aria-hidden="true"
+        >
+          <path
+            d="M12 3C16.9706 3 21 7.02944 21 12C21 16.9706 16.9706 21 12 21M12 3C7.02944 3 3 7.02944 3 12C3 16.9706 7.02944 21 12 21M12 3C14.2513 5.46383 15.5306 8.66364 15.6 12C15.5306 15.3364 14.2513 18.5362 12 21M12 3C9.74874 5.46383 8.46941 8.66364 8.4 12C8.46941 15.3364 9.74874 18.5362 12 21M4 9H20M4 15H20"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </button>
-      <button
-        type="button"
-        onClick={() => switchLocale("en")}
-        aria-pressed={locale === "en"}
-        disabled={isPending}
-        className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-          locale === "en" ? "bg-foreground text-white" : "text-foreground hover:bg-panel"
-        }`}
-      >
-        EN
-      </button>
+      {isOpen ? (
+        <div className="app-locale-popover" role="menu">
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={locale === "zh"}
+            disabled={isPending}
+            onClick={() => switchLocale("zh")}
+            className={`app-locale-popover-item ${
+              locale === "zh" ? "app-locale-popover-item-active" : ""
+            }`}
+          >
+            中文
+          </button>
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={locale === "en"}
+            disabled={isPending}
+            onClick={() => switchLocale("en")}
+            className={`app-locale-popover-item ${
+              locale === "en" ? "app-locale-popover-item-active" : ""
+            }`}
+          >
+            EN
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

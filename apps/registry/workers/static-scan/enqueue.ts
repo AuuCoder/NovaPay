@@ -6,10 +6,12 @@
  */
 
 import { scanBundle, type ScanResult } from "../../lib/static-scan/ast-scan";
+import { getRegistryRuntime, updatePluginVersionScanResult } from "../../lib/runtime/state";
 
 export interface ScanJob {
   versionId: string;
   pluginSlug: string;
+  pluginVersion: string;
   files: Array<{ relativePath: string; content: string }>;
   declaredCapabilities: string[];
 }
@@ -39,6 +41,13 @@ export async function enqueueScanJob(job: ScanJob): Promise<ScanJobResult> {
   };
 
   completedJobs.push(jobResult);
+  const state = await getRegistryRuntime();
+  updatePluginVersionScanResult({
+    state,
+    slug: job.pluginSlug,
+    version: job.pluginVersion,
+    scanResult: result,
+  });
   return jobResult;
 }
 

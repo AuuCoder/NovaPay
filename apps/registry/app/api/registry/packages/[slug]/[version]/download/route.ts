@@ -8,31 +8,36 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import {
+  describeDemoBundle,
   getDemoBundleRawBytes,
   getRegistryRuntime,
 } from "../../../../../../../lib/runtime/state";
+import { apiError } from "../../../../../../../lib/api/response";
 
 export const runtime = "nodejs";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ slug: string; version: string }> },
 ) {
   const { slug, version } = await params;
   const state = await getRegistryRuntime();
+  const bundle = describeDemoBundle(state, slug, version);
   const raw = getDemoBundleRawBytes(state, slug, version);
-  if (!raw) {
-    return NextResponse.json(
-      { error: "BUNDLE_NOT_FOUND", message: `No bundle for ${slug}@${version}` },
-      { status: 404 },
-    );
+  const stored = bundle && state.objectStore.get
+    ? await state.objectStore.get(bundle.storageKey)
+    : null;
+  const responseBody = raw ?? stored?.body ?? null;
+
+  if (!responseBody) {
+    return apiError(request, "BUNDLE_NOT_FOUND", 404, { slug, version });
   }
 
-  return new NextResponse(new Uint8Array(raw), {
+  return new NextResponse(new Uint8Array(responseBody), {
     status: 200,
     headers: {
-      "Content-Type": "application/json",
-      "Content-Length": String(raw.length),
+      "Content-Type": stored?.contentType ?? "application/json",
+      "Content-Length": String(responseBody.length),
       "Cache-Control": "public, max-age=60",
     },
   });

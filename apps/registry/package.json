@@ -5,7 +5,8 @@
   "type": "module",
   "description": "NovaPay Remote Plugin Registry — independent deployment service for the remote plugin marketplace.",
   "scripts": {
-    "dev": "next dev",
+    "dev": "WATCHPACK_POLLING=true CHOKIDAR_USEPOLLING=true next dev --webpack",
+    "dev:registry": "WATCHPACK_POLLING=true CHOKIDAR_USEPOLLING=true next dev --webpack --port 3100",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

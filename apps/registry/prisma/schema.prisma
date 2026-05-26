@@ -96,6 +96,9 @@ model Developer {
 
   plugins        PluginRecord[]
   auditLogs      AuditLog[]      @relation("AuditLogActorDeveloper")
+  ledgerEntries  RegistryLedgerEntry[]
+  orders         Order[]
+  licenses       License[]
   payoutAccounts PayoutAccount[]
   payoutRequests PayoutRequest[]
 
@@ -239,6 +242,28 @@ model RegistryConsumer {
   updatedAt       DateTime @updatedAt
 }
 
+model RegistrySetting {
+  key       String   @id
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RegistryLedgerEntry {
+  id          String    @id @default(cuid())
+  developerId String
+  developer   Developer @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  amountCents Int
+  currency    String    @default("CNY")
+  reason      String
+  externalRef String    @unique
+  occurredAt  DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  @@index([developerId, occurredAt])
+  @@index([developerId, currency, occurredAt])
+}
+
 // =====================================================================
 // Phase 3: Paid / License / Payout models
 // =====================================================================
@@ -282,52 +307,65 @@ model PayoutRequest {
 }
 
 model Order {
-  id              String     @id @default(cuid())
-  orderNumber     String     @unique
+  id              String        @id @default(cuid())
+  orderNumber     String        @unique
   pluginId        String
-  plugin          PluginRecord @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  pluginSlug      String
+  pluginRecordId  String?
+  pluginRecord    PluginRecord? @relation(fields: [pluginRecordId], references: [id], onDelete: SetNull)
+  developerId     String
+  developer       Developer     @relation(fields: [developerId], references: [id], onDelete: Restrict)
   version         String
-  buyerInstanceId String?    // NovaPay instance that purchased
-  buyerMerchantId String?    // NovaPay merchant that purchased
+  buyerInstanceId String?       // NovaPay instance that purchased
+  buyerMerchantId String?       // NovaPay merchant that purchased
   pricingPlanKind PricingPlanKind
   priceAmountCents Int
-  priceCurrency   String      @default("CNY")
-  state           OrderState  @default(PENDING)
-  novapayOrderId  String?     // Reference to NovaPay order
+  priceCurrency   String        @default("CNY")
+  state           OrderState    @default(PENDING)
+  novapayOrderId  String?       // Reference to NovaPay order
+  checkoutUrl     String?
+  licenseId       String?
   paidAt          DateTime?
   failedAt        DateTime?
   refundedAt      DateTime?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   license License?
 
-  @@index([pluginId, state])
+  @@index([pluginRecordId, state])
+  @@index([pluginSlug, state])
+  @@index([developerId, state])
   @@index([buyerInstanceId, state])
   @@index([buyerMerchantId, state])
 }
 
 model License {
-  id              String       @id @default(cuid())
-  licenseKey      String       @unique
-  licenseKeyHash  String       @unique
-  orderId         String?      @unique
-  order           Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  id              String        @id @default(cuid())
+  licenseKey      String?       @unique
+  licenseKeyHash  String        @unique
+  orderId         String?       @unique
+  order           Order?        @relation(fields: [orderId], references: [id], onDelete: SetNull)
   pluginId        String
-  plugin          PluginRecord @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  pluginSlug      String
+  pluginRecordId  String?
+  pluginRecord    PluginRecord? @relation(fields: [pluginRecordId], references: [id], onDelete: SetNull)
+  developerId     String?
+  developer       Developer?    @relation(fields: [developerId], references: [id], onDelete: SetNull)
   version         String
   pricingPlanKind PricingPlanKind
-  issuedAt        DateTime     @default(now())
+  issuedAt        DateTime      @default(now())
   expiresAt       DateTime?
-  state           LicenseState @default(ISSUED)
-  jwsCompact      String?      @db.Text
+  state           LicenseState  @default(ISSUED)
+  jwsCompact      String        @db.Text
   instanceId      String?
   merchantId      String?
 
   revocation LicenseRevocation?
 
-  // Partial unique index for merchantId IS NULL (allows multiple nulls)
-  @@unique([pluginId, instanceId, version])
+  @@index([pluginRecordId, state])
+  @@index([pluginSlug, state])
+  @@index([developerId, state])
 }
 
 model LicenseRevocation {

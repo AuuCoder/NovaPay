@@ -125,4 +125,68 @@ describe("balance ledger", () => {
     assert.equal(submit.success, false);
     assert.equal(submit.errorCode, "INVALID_AMOUNT");
   });
+
+  it("supports negative adjustment entries for refund clawback", async () => {
+    const ledger = createInMemoryBalanceLedger();
+    await ledger.credit({
+      developerId: "dev-1",
+      amountCents: 7000,
+      currency: "CNY",
+      reason: "LICENSE_SALE",
+      externalRef: "ord-1",
+    });
+    await ledger.credit({
+      developerId: "dev-1",
+      amountCents: -7000,
+      currency: "CNY",
+      reason: "LICENSE_REFUND",
+      externalRef: "refund:ord-1",
+    });
+
+    const balance = await ledger.getBalance("dev-1");
+    assert.equal(balance.total, 0);
+    assert.equal(balance.available, 0);
+  });
+
+  it("freezes recently credited revenue when a hold window is configured", async () => {
+    const ledger = createInMemoryBalanceLedger({
+      holdDaysResolver: async () => 7,
+    });
+
+    await ledger.credit({
+      developerId: "dev-1",
+      amountCents: 7000,
+      currency: "CNY",
+      reason: "LICENSE_SALE",
+      externalRef: "ord-hold",
+    });
+
+    const balance = await ledger.getBalance("dev-1");
+    assert.equal(balance.total, 7000);
+    assert.equal(balance.frozen, 7000);
+    assert.equal(balance.available, 0);
+  });
+
+  it("rejects payout submission while all credited revenue is still in the hold window", async () => {
+    const ledger = createInMemoryBalanceLedger({
+      holdDaysResolver: async () => 7,
+    });
+
+    await ledger.credit({
+      developerId: "dev-1",
+      amountCents: 7000,
+      currency: "CNY",
+      reason: "LICENSE_SALE",
+      externalRef: "ord-hold-submit",
+    });
+
+    const submit = await ledger.submitPayout({
+      developerId: "dev-1",
+      payoutAccountId: "acct-1",
+      amountCents: 1000,
+    });
+
+    assert.equal(submit.success, false);
+    assert.equal(submit.errorCode, "INSUFFICIENT_BALANCE");
+  });
 });

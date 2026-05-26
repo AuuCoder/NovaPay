@@ -64,7 +64,7 @@ describe("review state machine", () => {
 
   it("listAllowedTransitions returns the documented outgoing set", () => {
     assert.deepEqual(listAllowedTransitions("DRAFT").sort(), ["SUBMITTED"]);
-    assert.deepEqual(listAllowedTransitions("SUBMITTED").sort(), ["DRAFT", "IN_REVIEW"]);
+    assert.deepEqual(listAllowedTransitions("SUBMITTED").sort(), ["APPROVED", "DRAFT", "IN_REVIEW"]);
     assert.deepEqual(listAllowedTransitions("IN_REVIEW").sort(), ["APPROVED", "REJECTED"]);
     assert.deepEqual(listAllowedTransitions("APPROVED").sort(), ["PUBLISHED", "TAKEN_DOWN"]);
     assert.deepEqual(listAllowedTransitions("REJECTED").sort(), ["DRAFT"]);

@@ -1,141 +1,232 @@
-interface DailyStat {
-  date: string;
-  instances: number;
-  merchants: number;
-  revenueCents: number;
-}
+import { getCurrentLocale } from "@/lib/i18n-server";
+import { requireRegistryUserSession } from "../../../lib/auth/session";
+import { getRegistryRuntime } from "../../../lib/runtime/state";
+import { listPayoutAccountsByDeveloper } from "../../../lib/payouts/payout-accounts";
+import { SalesManager } from "../sales-manager";
+import Link from "next/link";
+import { governancePath } from "../../../lib/governance-paths";
 
-const stats: DailyStat[] = [
-  { date: "May 14", instances: 5, merchants: 12, revenueCents: 49800 },
-  { date: "May 13", instances: 3, merchants: 8, revenueCents: 19800 },
-  { date: "May 12", instances: 6, merchants: 14, revenueCents: 59400 },
-  { date: "May 11", instances: 2, merchants: 7, revenueCents: 9900 },
-  { date: "May 10", instances: 4, merchants: 11, revenueCents: 39600 },
-  { date: "May 09", instances: 4, merchants: 10, revenueCents: 39600 },
-  { date: "May 08", instances: 3, merchants: 9, revenueCents: 19800 },
-];
+export default async function DeveloperSalesPage() {
+  const session = await requireRegistryUserSession();
+  const locale = await getCurrentLocale();
 
-const maxRevenue = Math.max(...stats.map((s) => s.revenueCents));
+  if (session.actorKind !== "DEVELOPER") {
+    const content =
+      locale === "en"
+        ? {
+            eyebrow: "Access scope",
+            title: "This page is only for developer accounts",
+            lead:
+              "You are currently signed in with a NovaPay main-site admin SSO session. Sales and payout operations belong to publisher accounts, while review and governance belong to the governance workspace.",
+            primary: "Open review queue",
+            secondary: "Open license control",
+            tertiary: "Open payout review",
+          }
+        : {
+            eyebrow: "访问范围",
+            title: "当前页面仅面向开发者账号",
+            lead:
+              "你当前登录的是 NovaPay 主站管理员 SSO 会话。销售与打款属于发布者账号能力，审核与治理能力请进入治理工作区。",
+            primary: "打开审核队列",
+            secondary: "打开授权控制",
+            tertiary: "打开打款审核",
+          };
 
-function formatCny(cents: number) {
-  return `¥${(cents / 100).toFixed(2)}`;
-}
+    return (
+      <section className="admin-shell">
+        <div className="container admin-page">
+          <div className="governance-hero">
+            <div className="governance-hero-head">
+              <div className="admin-header-copy">
+                <p className="text-eyebrow">{content.eyebrow}</p>
+                <h1 className="admin-title">{content.title}</h1>
+                <p className="admin-subtitle">{content.lead}</p>
+              </div>
+            </div>
+            <div className="admin-toolbar">
+              <Link href={governancePath("/review-queue")} className="btn btn-primary">
+                {content.primary}
+              </Link>
+              <Link href={governancePath("/licenses")} className="btn btn-tertiary">
+                {content.secondary}
+              </Link>
+              <Link href={governancePath("/payouts")} className="btn btn-tertiary">
+                {content.tertiary}
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
-export default function DeveloperSalesPage() {
-  const totalRevenue = stats.reduce((acc, s) => acc + s.revenueCents, 0);
-  const totalInstances = stats.reduce((acc, s) => acc + s.instances, 0);
-  const totalMerchants = stats.reduce((acc, s) => acc + s.merchants, 0);
+  const state = await getRegistryRuntime();
+  const [balance, payouts, entries, accounts] = await Promise.all([
+    state.ledger.getBalance(session.actorId),
+    state.ledger.listPayouts(session.actorId),
+    state.ledger.listEntries(session.actorId),
+    listPayoutAccountsByDeveloper(session.actorId),
+  ]);
+  const orders = await state.orderStore.listByDeveloper(session.actorId);
+
+  const totalRevenue = entries
+    .filter((entry) => entry.amountCents > 0)
+    .reduce((sum, entry) => sum + entry.amountCents, 0);
+
+  const content =
+    locale === "en"
+      ? {
+          eyebrow: "Revenue",
+          title: "Settlement and payouts",
+          lead:
+            "Plugin marketplace payments are collected by the platform first. After review and settlement, NovaPay releases the developer share through payout requests and admin approval.",
+          labels: {
+            available: "Available",
+            frozen: "Frozen",
+            total: "Total",
+            accounts: "Payout accounts",
+            addAccount: "Add account",
+            accountType: "Account type",
+            bankTransfer: "Bank transfer",
+            paypal: "PayPal",
+            accountHolder: "Account holder",
+            bankName: "Bank name",
+            accountNumber: "Account number",
+            routingNumber: "Routing number",
+            paypalEmail: "PayPal email",
+            submitAccount: "Save payout account",
+            payouts: "Payout requests",
+            requestPayout: "Request payout",
+            amount: "Amount in CNY",
+            selectAccount: "Select payout account",
+            submitPayout: "Submit payout request",
+            status: "Status",
+            noAccounts: "No payout accounts have been added yet.",
+            noPayouts: "No payout requests yet.",
+            ledger: "Revenue ledger",
+            noEntries: "No revenue entries yet.",
+            orders: "Settlement orders",
+            noOrders: "No settlement orders yet.",
+            plugin: "Plugin",
+            buyer: "Buyer",
+            stateLabel: "State",
+            reason: "Reason",
+            reference: "Reference",
+            occurredAt: "Occurred at",
+            amountCol: "Amount",
+            pendingVerification: "Pending verification",
+            verified: "Verified",
+            suspended: "Suspended",
+            pendingReview: "Pending review",
+            approved: "Approved",
+            rejected: "Rejected",
+            errorCreateAccount: "Failed to create payout account.",
+            errorPayout: "Failed to submit payout request.",
+          },
+          revenue: "Recognized revenue",
+        }
+      : {
+          eyebrow: "结算",
+          title: "分账与打款",
+          lead:
+            "插件市场的用户付款先进入平台账户，再按平台审核与结算规则，把作者应得分成通过打款申请释放给开发者。",
+          labels: {
+            available: "可用余额",
+            frozen: "冻结余额",
+            total: "总余额",
+            accounts: "收款账户",
+            addAccount: "新增账户",
+            accountType: "账户类型",
+            bankTransfer: "银行卡转账",
+            paypal: "PayPal",
+            accountHolder: "收款人",
+            bankName: "银行名称",
+            accountNumber: "银行卡号",
+            routingNumber: "路由号",
+            paypalEmail: "PayPal 邮箱",
+            submitAccount: "保存收款账户",
+            payouts: "打款申请",
+            requestPayout: "申请打款",
+            amount: "打款金额（CNY）",
+            selectAccount: "选择收款账户",
+            submitPayout: "提交打款申请",
+            status: "状态",
+            noAccounts: "当前还没有收款账户。",
+            noPayouts: "当前还没有打款申请。",
+            ledger: "余额流水",
+            noEntries: "当前还没有流水记录。",
+            orders: "分账订单",
+            noOrders: "当前还没有分账订单。",
+            plugin: "插件",
+            buyer: "购买方",
+            stateLabel: "状态",
+            reason: "原因",
+            reference: "关联标识",
+            occurredAt: "发生时间",
+            amountCol: "金额",
+            pendingVerification: "待校验",
+            verified: "已校验",
+            suspended: "已停用",
+            pendingReview: "待审核",
+            approved: "已批准",
+            rejected: "已拒绝",
+            errorCreateAccount: "创建收款账户失败。",
+            errorPayout: "提交打款申请失败。",
+          },
+          revenue: "累计已确认收入",
+        };
 
   return (
-    <>
-      <section className="hero-band">
-        <div className="container">
-          <p className="text-eyebrow">Last 7 days</p>
-          <h1 className="text-display-lg" style={{ marginTop: 12 }}>Sales & adoption</h1>
-          <p className="text-lead" style={{ marginTop: 12, maxWidth: 640 }}>
-            Daily install footprint and revenue across all your published plugins. License sales
-            settle to your developer balance within 24 hours.
-          </p>
-
-          <div className="grid-3" style={{ marginTop: 40 }}>
-            <div className="stat-card feature">
-              <p className="stat-label">Revenue</p>
-              <p className="stat-value">{formatCny(totalRevenue)}</p>
-              <p className="stat-delta">+18% vs last week</p>
-            </div>
-            <div className="stat-card">
-              <p className="stat-label">Distinct instances</p>
-              <p className="stat-value">{totalInstances}</p>
-              <p className="text-body-sm text-mute">unique NovaPay deployments</p>
-            </div>
-            <div className="stat-card">
-              <p className="stat-label">Active merchants</p>
-              <p className="stat-value">{totalMerchants}</p>
-              <p className="text-body-sm text-mute">cumulative across plugins</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="content-band">
-        <div className="container" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.3fr) minmax(0, 1fr)", gap: 32 }}>
-          <div className="card card-lg">
-            <div className="flex-between" style={{ marginBottom: 24 }}>
-              <div>
-                <h2 className="text-display-xs">Revenue by day</h2>
-                <p className="text-body-sm text-mute" style={{ marginTop: 4 }}>License sales × revenue share</p>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button className="pill">7d</button>
-                <button className="pill">30d</button>
-                <button className="pill">90d</button>
-              </div>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 18, height: 220 }}>
-              {stats.slice().reverse().map((stat) => {
-                const heightPct = (stat.revenueCents / maxRevenue) * 100;
-                return (
-                  <div key={stat.date} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-                    <div style={{ height: "100%", width: "100%", display: "flex", alignItems: "flex-end" }}>
-                      <div
-                        title={formatCny(stat.revenueCents)}
-                        style={{
-                          width: "100%",
-                          height: `${Math.max(8, heightPct)}%`,
-                          background: "var(--color-primary)",
-                          borderRadius: "12px 12px 4px 4px",
-                          transition: "height 0.4s ease",
-                        }}
-                      />
-                    </div>
-                    <span className="text-caption">{stat.date}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="card-feature-dark" style={{ padding: 32, display: "flex", flexDirection: "column", justifyContent: "space-between", gap: 24 }}>
-            <div>
-              <p className="text-eyebrow" style={{ color: "var(--color-primary)" }}>Available balance</p>
-              <p className="text-display-md" style={{ marginTop: 8 }}>{formatCny(28800)}</p>
-              <p className="text-body-sm" style={{ marginTop: 8, color: "var(--color-canvas-soft)" }}>
-                Frozen pending payouts: ¥0.00
-              </p>
-            </div>
-            <div className="flex-col">
-              <button className="btn btn-primary" style={{ width: "100%" }}>Request payout</button>
-              <button className="btn btn-secondary" style={{ width: "100%" }}>Add bank account</button>
-            </div>
+    <section className="admin-shell">
+      <div className="container admin-page">
+        <div className="admin-header">
+          <div className="admin-header-copy">
+            <p className="text-eyebrow">{content.eyebrow}</p>
+            <h1 className="admin-title">{content.title}</h1>
+            <p className="admin-subtitle">{content.lead}</p>
           </div>
         </div>
 
-        <div className="container" style={{ marginTop: 32 }}>
-          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th style={{ textAlign: "right" }}>Instances</th>
-                  <th style={{ textAlign: "right" }}>Merchants</th>
-                  <th style={{ textAlign: "right" }}>Revenue</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stats.map((stat) => (
-                  <tr key={stat.date}>
-                    <td className="text-body-md-strong">{stat.date}</td>
-                    <td style={{ textAlign: "right" }}>{stat.instances}</td>
-                    <td style={{ textAlign: "right" }}>{stat.merchants}</td>
-                    <td style={{ textAlign: "right", fontWeight: 600 }}>{formatCny(stat.revenueCents)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="grid-3">
+          <div className="stat-card feature">
+            <p className="stat-label">{content.revenue}</p>
+            <p className="stat-value">¥{(totalRevenue / 100).toFixed(2)}</p>
+          </div>
+          <div className="stat-card">
+            <p className="stat-label">{locale === "en" ? "Available balance" : "可用余额"}</p>
+            <p className="stat-value">¥{(balance.available / 100).toFixed(2)}</p>
+          </div>
+          <div className="stat-card">
+            <p className="stat-label">{locale === "en" ? "Frozen balance" : "冻结余额"}</p>
+            <p className="stat-value">¥{(balance.frozen / 100).toFixed(2)}</p>
           </div>
         </div>
-      </section>
-    </>
+
+        <SalesManager
+          locale={locale}
+          initialAccounts={accounts.map((account) => ({
+            ...account,
+            verifiedAt: account.verifiedAt?.toISOString() ?? null,
+            createdAt: account.createdAt.toISOString(),
+          }))}
+          initialPayouts={payouts.map((request) => ({
+            ...request,
+            createdAt: request.createdAt.toISOString(),
+            processedAt: request.processedAt?.toISOString() ?? null,
+          }))}
+          initialEntries={entries.map((entry) => ({
+            ...entry,
+            occurredAt: entry.occurredAt.toISOString(),
+          }))}
+          initialOrders={orders.map((order) => ({
+            ...order,
+            paidAt: order.paidAt?.toISOString() ?? null,
+            createdAt: order.createdAt.toISOString(),
+          }))}
+          initialBalance={balance}
+          labels={content.labels}
+        />
+      </div>
+    </section>
   );
 }

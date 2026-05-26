@@ -7,11 +7,13 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
+import { requireRegistryAdminRequest } from "../../../../../lib/auth/session";
 import { getRegistryRuntime } from "../../../../../lib/runtime/state";
 import {
   createLocalKeyPairAdapter,
   rotateSigningKey,
 } from "../../../../../lib/signing/rotation";
+import { apiError } from "../../../../../lib/api/response";
 
 export const runtime = "nodejs";
 
@@ -28,6 +30,11 @@ function generateDefaultKeyId(): string {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireRegistryAdminRequest(request);
+  if (auth.response) {
+    return auth.response;
+  }
+
   let body: RotateRequestBody = {};
   try {
     body = (await request.json()) as RotateRequestBody;
@@ -48,6 +55,7 @@ export async function POST(request: NextRequest) {
       state.keyStore,
       adapter,
     );
+    state.activateSigningKeyPair(result.keyPair);
 
     return NextResponse.json({
       success: true,
@@ -68,12 +76,8 @@ export async function POST(request: NextRequest) {
       trustJsonCacheVersion: result.trustJsonCacheVersion,
     });
   } catch (error) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      { status: 400 },
-    );
+    return apiError(request, "SIGNING_KEY_ROTATION_FAILED", 400, undefined, {
+      success: false,
+    });
   }
 }

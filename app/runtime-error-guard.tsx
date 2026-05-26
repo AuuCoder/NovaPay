@@ -1,4 +1,6 @@
-import Script from "next/script";
+"use client";
+
+import { useEffect } from "react";
 
 const EXTENSION_PROTOCOLS = [
   "chrome-extension://",
@@ -12,113 +14,121 @@ const KNOWN_EXTENSION_NOISE_MESSAGES = [
   "unauthorized origin",
 ];
 
-function buildGuardScript() {
-  const protocols = JSON.stringify(EXTENSION_PROTOCOLS);
-  const noisyMessages = JSON.stringify(KNOWN_EXTENSION_NOISE_MESSAGES);
+const isString = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0;
 
-  return `
-    (() => {
-      const EXTENSION_PROTOCOLS = ${protocols};
-      const KNOWN_EXTENSION_NOISE_MESSAGES = ${noisyMessages};
+const includesExtensionProtocol = (value: string) =>
+  EXTENSION_PROTOCOLS.some((protocol) => value.includes(protocol));
 
-      const isString = (value) => typeof value === "string" && value.length > 0;
+const hasKnownNoiseMessage = (value: string) =>
+  KNOWN_EXTENSION_NOISE_MESSAGES.some((message) =>
+    value.toLowerCase().includes(message),
+  );
 
-      const includesExtensionProtocol = (value) =>
-        isString(value) && EXTENSION_PROTOCOLS.some((protocol) => value.includes(protocol));
+function collectStrings(value: unknown, depth = 0): string[] {
+  if (depth > 2 || value == null) {
+    return [];
+  }
 
-      const hasKnownNoiseMessage = (value) =>
-        isString(value) &&
-        KNOWN_EXTENSION_NOISE_MESSAGES.some((message) =>
-          value.toLowerCase().includes(message),
-        );
+  if (typeof value === "string") {
+    return [value];
+  }
 
-      const collectStrings = (value, depth = 0) => {
-        if (depth > 2 || value == null) {
-          return [];
-        }
+  if (typeof value !== "object") {
+    return [];
+  }
 
-        if (typeof value === "string") {
-          return [value];
-        }
+  const keys = [
+    "message",
+    "stack",
+    "filename",
+    "fileName",
+    "sourceURL",
+    "reason",
+    "cause",
+  ] as const;
+  const values: string[] = [];
+  const record = value as Record<string, unknown>;
 
-        if (typeof value !== "object") {
-          return [];
-        }
+  for (const key of keys) {
+    try {
+      values.push(...collectStrings(record[key], depth + 1));
+    } catch {
+      // Ignore cross-origin access failures while inspecting extension rejections.
+    }
+  }
 
-        const keys = ["message", "stack", "filename", "fileName", "sourceURL", "reason", "cause"];
-        const values = [];
+  return values;
+}
 
-        for (const key of keys) {
-          try {
-            values.push(...collectStrings(value[key], depth + 1));
-          } catch (_error) {
-            // Ignore cross-origin access failures while inspecting extension rejections.
-          }
-        }
+function shouldIgnore(payload: {
+  filename?: string;
+  message?: string;
+  error?: unknown;
+  reason?: unknown;
+}) {
+  const parts = [
+    payload.filename,
+    payload.message,
+    ...collectStrings(payload.error),
+    ...collectStrings(payload.reason),
+  ].filter(isString);
+  const combined = parts.join("\n");
 
-        return values;
-      };
+  if (includesExtensionProtocol(combined)) {
+    return true;
+  }
 
-      const shouldIgnore = (payload) => {
-        const parts = [payload.filename, payload.message, ...collectStrings(payload.error), ...collectStrings(payload.reason)]
-          .filter(Boolean);
-        const combined = parts.join("\\n");
+  return hasKnownNoiseMessage(combined);
+}
 
-        if (includesExtensionProtocol(combined)) {
-          return true;
-        }
-
-        return hasKnownNoiseMessage(combined);
-      };
-
-      const swallow = (event) => {
-        event.preventDefault?.();
-        event.stopImmediatePropagation?.();
-        event.stopPropagation?.();
-      };
-
-      window.addEventListener(
-        "error",
-        (event) => {
-          if (
-            shouldIgnore({
-              filename: event.filename,
-              message: event.message,
-              error: event.error,
-            })
-          ) {
-            swallow(event);
-          }
-        },
-        true,
-      );
-
-      window.addEventListener(
-        "unhandledrejection",
-        (event) => {
-          if (
-            shouldIgnore({
-              message: typeof event.reason === "string" ? event.reason : "",
-              reason: event.reason,
-            })
-          ) {
-            swallow(event);
-          }
-        },
-        true,
-      );
-    })();
-  `;
+function swallow(event: Event) {
+  event.preventDefault?.();
+  event.stopImmediatePropagation?.();
+  event.stopPropagation?.();
 }
 
 export function RuntimeErrorGuard() {
-  if (process.env.NODE_ENV !== "development") {
-    return null;
-  }
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") {
+      return;
+    }
 
-  return (
-    <Script id="runtime-error-guard" strategy="beforeInteractive">
-      {buildGuardScript()}
-    </Script>
-  );
+    const handleError = (event: ErrorEvent) => {
+      if (
+        shouldIgnore({
+          filename: event.filename,
+          message: event.message,
+          error: event.error,
+        })
+      ) {
+        swallow(event);
+      }
+    };
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      if (
+        shouldIgnore({
+          message: typeof event.reason === "string" ? event.reason : "",
+          reason: event.reason,
+        })
+      ) {
+        swallow(event);
+      }
+    };
+
+    window.addEventListener("error", handleError, true);
+    window.addEventListener("unhandledrejection", handleUnhandledRejection, true);
+
+    return () => {
+      window.removeEventListener("error", handleError, true);
+      window.removeEventListener(
+        "unhandledrejection",
+        handleUnhandledRejection,
+        true,
+      );
+    };
+  }, []);
+
+  return null;
 }

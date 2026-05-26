@@ -15,12 +15,23 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { getRegistryRuntime } from "../../../../../../lib/runtime/state";
+import {
+  getRegistryRuntime,
+  resolveCatalogPaidPricing,
+} from "../../../../../../lib/runtime/state";
 import { requireConsumer } from "../../../../../../lib/auth/require-consumer";
+import { getPluginOwner } from "../../../../../../lib/developer/plugin-ownership";
 import {
   createPluginOrder,
   markOrderPaidAndIssueLicense,
 } from "../../../../../../lib/payments/order-service";
+import { getSettlementSettings } from "../../../../../../lib/settlement/settings";
+import { apiError } from "../../../../../../lib/api/response";
+import { NovaPayClient } from "../../../../../../lib/payments/novapay-client";
+import {
+  getRegistryNovaPayBridgeConfig,
+  isRegistryNovaPayBridgeConfigured,
+} from "../../../../../../lib/payments/novapay-config";
 
 export const runtime = "nodejs";
 
@@ -37,27 +48,23 @@ export async function POST(
   // Find the plugin in the catalog
   const plugin = state.catalog.find((p) => p.slug === slug);
   if (!plugin) {
-    return NextResponse.json(
-      { error: "PLUGIN_NOT_FOUND", message: `No plugin with slug: ${slug}` },
-      { status: 404 },
-    );
+    return apiError(request, "PLUGIN_NOT_FOUND", 404, { slug });
   }
 
   if (plugin.pricingMode !== "PAID") {
-    return NextResponse.json(
-      { error: "PLUGIN_IS_FREE", message: "This plugin is free; no order required." },
-      { status: 400 },
-    );
+    return apiError(request, "PLUGIN_IS_FREE", 400);
+  }
+
+  const paidPricing = resolveCatalogPaidPricing(plugin);
+  if (!paidPricing) {
+    return apiError(request, "PLUGIN_PRICING_INCOMPLETE", 409);
   }
 
   let body: Record<string, unknown> = {};
   try {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
-    return NextResponse.json(
-      { error: "INVALID_BODY", message: "Request body must be JSON." },
-      { status: 400 },
-    );
+    return apiError(request, "INVALID_BODY", 400);
   }
 
   const instanceId =
@@ -68,10 +75,7 @@ export async function POST(
       : null;
 
   if (!instanceId) {
-    return NextResponse.json(
-      { error: "MISSING_INSTANCE_ID", message: "instanceId is required." },
-      { status: 400 },
-    );
+    return apiError(request, "MISSING_INSTANCE_ID", 400);
   }
 
   // Create the order
@@ -79,13 +83,13 @@ export async function POST(
     {
       pluginSlug: slug,
       pluginId: slug, // In-memory; production uses the real PluginRecord.id
-      developerId: "demo-developer", // Placeholder
+      developerId: getPluginOwner(slug) ?? "novapay-official",
       version: plugin.version,
       buyerInstanceId: instanceId,
       buyerMerchantId: merchantId,
-      pricingPlanKind: "PER_INSTANCE_ONE_TIME",
-      priceAmountCents: 9900, // Placeholder; production reads from PluginRecord
-      priceCurrency: "CNY",
+      pricingPlanKind: paidPricing.pricingPlanKind,
+      priceAmountCents: paidPricing.priceAmountCents,
+      priceCurrency: paidPricing.priceCurrency,
     },
     {
       orderStore: state.orderStore,
@@ -95,13 +99,51 @@ export async function POST(
     },
   );
 
-  // Phase 3 dev mode: auto-pay and issue license immediately so the
-  // NovaPay main app can complete the purchase round-trip without a real
-  // payment gateway. In production this would return a checkoutUrl and
-  // wait for the payment callback.
+  if (await isRegistryNovaPayBridgeConfigured()) {
+    const bridgeConfig = await getRegistryNovaPayBridgeConfig();
+    const publicBaseUrl = bridgeConfig.publicBaseUrl.replace(/\/$/, "");
+    const client = new NovaPayClient({
+      baseUrl: bridgeConfig.baseUrl,
+      merchantId: bridgeConfig.merchantCode,
+      apiKeyId: bridgeConfig.apiKeyId,
+      apiKeySecret: bridgeConfig.apiKeySecret,
+    });
+
+    const payment = await client.createPaymentOrder({
+      externalOrderId: order.id,
+      amountCents: order.priceAmountCents,
+      currency: order.priceCurrency,
+      subject: `${plugin.displayName} ${plugin.version}`,
+      channelCode: bridgeConfig.channelCode,
+      callbackUrl: bridgeConfig.callbackUrl,
+      returnUrl: `${publicBaseUrl}/admin/plugins/${slug}?registryPluginSlug=${encodeURIComponent(slug)}&registryOrderId=${encodeURIComponent(order.id)}`,
+      metadata: {
+        registryOrderId: order.id,
+        registryPluginSlug: slug,
+      },
+    });
+
+    await state.orderStore.update(order.id, {
+      novapayOrderId: payment.novapayOrderId,
+      checkoutUrl: payment.checkoutUrl,
+      state: payment.status === "PROCESSING" ? "PENDING" : "PENDING",
+    });
+
+    return NextResponse.json({
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      state: "PENDING",
+      checkoutUrl: payment.checkoutUrl,
+      license: null,
+    });
+  }
+
+  // Dev fallback: auto-pay immediately when the real NovaPay bridge is not
+  // configured so local integration can still complete end-to-end.
   const autoPayEnabled = process.env.REGISTRY_AUTO_PAY !== "0";
 
   if (autoPayEnabled) {
+    const settlementSettings = await getSettlementSettings();
     const paid = await markOrderPaidAndIssueLicense(
       {
         orderId: order.id,
@@ -111,7 +153,9 @@ export async function POST(
         orderStore: state.orderStore,
         signer: state.signer,
         keyStore: state.keyStore,
+        licenseStore: state.licenseStore,
         ledger: state.ledger,
+        developerRevenueSharePercent: settlementSettings.developerRevenueSharePercent,
       },
     );
 
@@ -123,7 +167,7 @@ export async function POST(
       license: {
         licenseKey: paid.licenseJwsCompact,
         licenseKeyHash: paid.licenseKeyHash,
-        expiresAt: null, // perpetual for PER_INSTANCE_ONE_TIME
+        expiresAt: null,
       },
     });
   }

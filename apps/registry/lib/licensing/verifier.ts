@@ -138,10 +138,15 @@ export interface RevocationLookup {
   isRevoked(licenseKeyHash: string): Promise<boolean>;
 }
 
+export interface LicenseLookup {
+  findById(id: string): Promise<{ id: string } | null>;
+}
+
 export async function verifyLicense(
   input: LicenseVerifyInput,
   keyStore: SigningKeyStore,
   revocations?: RevocationLookup,
+  licenses?: LicenseLookup,
 ): Promise<LicenseVerifyResult> {
   const parsed = parseJwsCompact(input.jwsCompact);
   if (!parsed) {
@@ -250,6 +255,18 @@ export async function verifyLicense(
   const licenseKeyHash = createHash("sha256")
     .update(input.jwsCompact)
     .digest("hex");
+
+  if (licenses) {
+    const issued = await licenses.findById(claims.jti);
+    if (!issued) {
+      return {
+        valid: false,
+        reason: "UNKNOWN_LICENSE",
+        message: `No issued license found for jti=${claims.jti}.`,
+        claims,
+      };
+    }
+  }
 
   if (revocations) {
     const revoked = await revocations.isRevoked(licenseKeyHash);

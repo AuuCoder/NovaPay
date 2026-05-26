@@ -41,7 +41,15 @@ async function loadClient(): Promise<PrismaClientLike | null> {
       (mod as { PrismaClient?: new () => PrismaClientLike }).PrismaClient;
     if (!PrismaClientCtor) return null;
 
-    return new PrismaClientCtor();
+    const { PrismaPg } = await import("@prisma/adapter-pg").catch(() => ({ PrismaPg: null }));
+    const connectionString = process.env.DATABASE_URL?.trim();
+    if (!PrismaPg || !connectionString) {
+      return null;
+    }
+
+    return new (PrismaClientCtor as new (options?: unknown) => PrismaClientLike)({
+      adapter: new PrismaPg({ connectionString }),
+    });
   } catch {
     return null;
   }

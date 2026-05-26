@@ -1,7 +1,9 @@
 import { saveBindingAction } from "@/app/admin/actions";
 import {
+  buildPageHref,
   formatDateTime,
-  getPaymentChannelOptions,
+  getActivePaymentChannelOptions,
+  readSearchFilters,
   readPageMessages,
   type SearchParamsInput,
 } from "@/app/admin/support";
@@ -14,6 +16,7 @@ import {
   inputClass,
   panelClass,
   selectClass,
+  subtleButtonClass,
 } from "@/app/admin/ui";
 import { requireAdminPermission } from "@/lib/admin-session";
 import { getCurrentLocale } from "@/lib/i18n-server";
@@ -27,9 +30,15 @@ export default async function BindingsPage({
 }) {
   await requireAdminPermission("binding:read");
   const prisma = getPrismaClient();
-  const messages = await readPageMessages(searchParams);
   const locale = await getCurrentLocale();
-  const paymentChannelOptions = getPaymentChannelOptions(locale);
+  const [messages, filters, paymentChannelOptions] = await Promise.all([
+    readPageMessages(searchParams),
+    readSearchFilters(searchParams, ["merchantCode", "channelCode", "q"]),
+    getActivePaymentChannelOptions(locale),
+  ]);
+  const keyword = filters.q.trim().toLowerCase();
+  const merchantCodeFilter = filters.merchantCode;
+  const channelCodeFilter = filters.channelCode;
   const content =
     locale === "en"
       ? {
@@ -37,6 +46,15 @@ export default async function BindingsPage({
           title: "Merchant routing bindings",
           description:
             "Define which channels each merchant can use, choose the default merchant-owned channel instance, and maintain amount limits and fee rates. Legacy platform collection is disabled.",
+          filterTitle: "Binding filters",
+          filterDesc:
+            "Narrow the list by merchant, channel, or keyword before changing routing. This view is also used as the landing page from the plugin market.",
+          keywordLabel: "Keyword",
+          keywordPlaceholder: "Merchant code / merchant name / account name / token",
+          allMerchants: "All Merchants",
+          allChannels: "All Channels",
+          filterButton: "Apply Filters",
+          resultSummary: "Filtered bindings",
           formTitle: "Create or update binding",
           merchantLabel: "Merchant",
           channelLabel: "Channel",
@@ -59,6 +77,8 @@ export default async function BindingsPage({
           legacyPlatform: "Legacy Platform Account",
           autoRoute: "Unspecified. Fallback to automatic system routing.",
           token: "Token",
+          openOrders: "Open orders",
+          openMerchant: "Merchant detail",
           legacyWarning:
             "This binding still references the legacy platform collection mode. Switch it to a merchant-owned channel instance as soon as possible.",
         }
@@ -67,6 +87,14 @@ export default async function BindingsPage({
           title: "商户通道路由",
           description:
             "这里定义某个商户可使用哪些通道，以及默认走哪个商户自有通道实例，并维护限额与费率。平台代收款模式已停用。",
+          filterTitle: "路由筛选",
+          filterDesc: "可按商户、通道或关键词先聚焦结果，再调整默认路由。插件市场会直接跳转到这个筛选视图。",
+          keywordLabel: "关键词",
+          keywordPlaceholder: "商户编码 / 商户名称 / 实例名 / 特征码",
+          allMerchants: "全部商户",
+          allChannels: "全部通道",
+          filterButton: "应用筛选",
+          resultSummary: "当前路由数",
           formTitle: "新增或更新绑定",
           merchantLabel: "商户",
           channelLabel: "通道",
@@ -88,6 +116,8 @@ export default async function BindingsPage({
           legacyPlatform: "遗留平台账号",
           autoRoute: "未指定，按系统自动路由",
           token: "特征码",
+          openOrders: "查看订单",
+          openMerchant: "商户详情",
           legacyWarning: "该绑定仍引用旧的平台收款模式，请尽快切换为商户自有通道实例。",
         };
   const [merchants, merchantChannelAccounts, bindings] = await Promise.all([
@@ -133,6 +163,41 @@ export default async function BindingsPage({
       },
     }),
   ]);
+  const filteredBindings = bindings.filter((binding) => {
+    if (merchantCodeFilter && binding.merchant.code !== merchantCodeFilter) {
+      return false;
+    }
+
+    if (channelCodeFilter && binding.channelCode !== channelCodeFilter) {
+      return false;
+    }
+
+    if (!keyword) {
+      return true;
+    }
+
+    return [
+      binding.merchant.code,
+      binding.merchant.name,
+      binding.channelCode,
+      binding.merchantChannelAccount?.displayName,
+      binding.merchantChannelAccount?.callbackToken,
+      binding.providerAccount?.displayName,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(keyword);
+  });
+  const currentPageHref = buildPageHref(
+    "/admin/bindings",
+    {
+      merchantCode: merchantCodeFilter || null,
+      channelCode: channelCodeFilter || null,
+      q: filters.q || null,
+    },
+    1,
+  );
 
   return (
     <div className="space-y-8">
@@ -145,11 +210,69 @@ export default async function BindingsPage({
       <FlashMessage success={messages.success} error={messages.error} />
 
       <section className={`${panelClass} p-6`}>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-2xl font-semibold text-foreground">{content.filterTitle}</h2>
+            <p className="mt-2 text-sm leading-7 text-muted">{content.filterDesc}</p>
+          </div>
+          <div className="rounded-full border border-line bg-white px-4 py-2 text-sm text-muted">
+            {content.resultSummary}
+            {locale === "en" ? ": " : "："}
+            {filteredBindings.length}
+          </div>
+        </div>
+
+        <form className="mt-6 grid gap-4 rounded-[1.5rem] border border-line bg-white/70 p-5 lg:grid-cols-4">
+          <LabeledField label={content.keywordLabel}>
+            <input
+              name="q"
+              defaultValue={filters.q}
+              placeholder={content.keywordPlaceholder}
+              className={inputClass}
+            />
+          </LabeledField>
+          <LabeledField label={content.merchantLabel}>
+            <select name="merchantCode" className={selectClass} defaultValue={merchantCodeFilter}>
+              <option value="">{content.allMerchants}</option>
+              {merchants.map((merchant) => (
+                <option key={merchant.id} value={merchant.code}>
+                  {merchant.code} / {getMerchantDisplayName(merchant.name, locale)}
+                </option>
+              ))}
+            </select>
+          </LabeledField>
+          <LabeledField label={content.channelLabel}>
+            <select name="channelCode" className={selectClass} defaultValue={channelCodeFilter}>
+              <option value="">{content.allChannels}</option>
+              {paymentChannelOptions.map((channel) => (
+                <option key={channel.code} value={channel.code}>
+                  {channel.code}
+                </option>
+              ))}
+            </select>
+          </LabeledField>
+          <div className="flex items-end">
+            <button type="submit" className={buttonClass}>
+              {content.filterButton}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className={`${panelClass} p-6`}>
         <h2 className="text-2xl font-semibold text-foreground">{content.formTitle}</h2>
         <form action={saveBindingAction} className="mt-6 grid gap-4 lg:grid-cols-2">
-          <input type="hidden" name="redirectTo" value="/admin/bindings" />
+          <input type="hidden" name="redirectTo" value={currentPageHref} />
           <LabeledField label={content.merchantLabel}>
-            <select name="merchantId" className={selectClass} defaultValue={merchants[0]?.id ?? ""}>
+            <select
+              name="merchantId"
+              className={selectClass}
+              defaultValue={
+                merchants.find((merchant) => merchant.code === merchantCodeFilter)?.id ??
+                merchants[0]?.id ??
+                ""
+              }
+            >
               {merchants.map((merchant) => (
                 <option key={merchant.id} value={merchant.id}>
                   {merchant.code} / {getMerchantDisplayName(merchant.name, locale)}
@@ -161,7 +284,7 @@ export default async function BindingsPage({
             <select
               name="channelCode"
               className={selectClass}
-              defaultValue={paymentChannelOptions[0]?.code ?? ""}
+              defaultValue={channelCodeFilter || paymentChannelOptions[0]?.code || ""}
             >
               {paymentChannelOptions.map((channel) => (
                 <option key={channel.code} value={channel.code}>
@@ -203,11 +326,11 @@ export default async function BindingsPage({
         </form>
       </section>
 
-      {bindings.length === 0 ? (
+      {filteredBindings.length === 0 ? (
         <EmptyState title={content.emptyTitle} description={content.emptyDesc} />
       ) : (
         <section className="grid gap-6 xl:grid-cols-2">
-          {bindings.map((binding) => (
+          {filteredBindings.map((binding) => (
             <article key={binding.id} className={`${panelClass} p-6`}>
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
@@ -228,7 +351,7 @@ export default async function BindingsPage({
               </p>
 
               <form action={saveBindingAction} className="mt-6 grid gap-4">
-                <input type="hidden" name="redirectTo" value="/admin/bindings" />
+                <input type="hidden" name="redirectTo" value={currentPageHref} />
                 <input type="hidden" name="merchantId" value={binding.merchantId} />
 
                 <LabeledField label={content.channelLabel}>
@@ -311,10 +434,22 @@ export default async function BindingsPage({
                   ) : null}
                 </div>
 
-                <div>
+                <div className="flex flex-wrap gap-3">
                   <button type="submit" className={buttonClass}>
                     {content.saveButton}
                   </button>
+                  <a
+                    href={`/admin/orders?merchantCode=${binding.merchant.code}&channelCode=${binding.channelCode}`}
+                    className={subtleButtonClass}
+                  >
+                    {content.openOrders}
+                  </a>
+                  <a
+                    href={`/admin/merchants/${binding.merchantId}`}
+                    className={subtleButtonClass}
+                  >
+                    {content.openMerchant}
+                  </a>
                 </div>
               </form>
             </article>
