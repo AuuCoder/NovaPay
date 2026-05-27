@@ -1029,11 +1029,23 @@ export async function getMarketplacePaymentPluginDetail(
   const plugin =
     remoteDefinitions.get(row.channelCode)?.inspection.definition ?? null;
 
-  if (!plugin) {
+  const usage = plugin
+    ? await getMarketplacePluginUsage(row.channelCode)
+    : {
+        merchantAccountCount: 0,
+        enabledMerchantAccountCount: 0,
+        bindingCount: 0,
+        enabledBindingCount: 0,
+        orderCount: 0,
+        refundCount: 0,
+      };
+  const baseRecord = plugin
+    ? toMarketplacePaymentRecord(plugin, row, locale, usage)
+    : toLocalMarketplacePaymentRecord(row, locale);
+
+  if (!baseRecord) {
     return null;
   }
-
-  const usage = await getMarketplacePluginUsage(row.channelCode);
   const merchantInstalls = await Promise.all(
     row.merchantInstalls.map(async (install) => {
       const [channelAccountCount, bindingCount] = await Promise.all([
@@ -1063,7 +1075,7 @@ export async function getMarketplacePaymentPluginDetail(
   );
 
   return {
-    ...toMarketplacePaymentRecord(plugin, row, locale, usage),
+    ...baseRecord,
     merchantInstalls,
     purchaseRecords: row.purchaseRecords.map((record) => ({
       id: record.id,
