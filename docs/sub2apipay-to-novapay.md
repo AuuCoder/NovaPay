@@ -1,10 +1,12 @@
-# Sub2ApiPay 到 NovaPay 的结构映射
+# Sub2ApiPay 到 NovaPay 的结构演进（历史记录）
 
-这份文档的目标不是复刻 `sub2apipay`，而是提炼其中对 `NovaPay` 有价值的支付网关骨架，并明确剔除所有 `Sub2API` 业务耦合。
+> 这是一份历史文档。NovaPay 早期从一个名为 `sub2apipay` 的项目（一个面向「Sub2API」内部用户充值/订阅的支付脚本）中提炼支付网关骨架而来。本文记录了当时的取舍和迁移决策；如果你只关心当前架构，参考 [README.zh-CN.md](../README.zh-CN.md) 和 [production-runbook.md](./production-runbook.md) 即可。
 
-## 结论
+---
 
-`sub2apipay` 值得借鉴的是：
+## 当时的取舍
+
+`sub2apipay` 值得借鉴的：
 
 - 统一的支付 provider 抽象
 - 回调验签后进入统一订单状态机
@@ -12,341 +14,78 @@
 - 支付限额、超时、取消、退款、重试
 - 管理后台在线配置与统计面板
 
-`sub2apipay` 必须剔除的是：
+必须剔除的：
 
 - `Sub2API` 用户体系
 - `Sub2API` 余额充值与订阅发放逻辑
 - 依赖 `token -> Sub2API user` 的用户端支付页
-- `Channel / SubscriptionPlan` 这类面向 Sub2API 渠道与套餐销售的模型
+- `Channel / SubscriptionPlan` 这类面向内部渠道与套餐销售的模型
 
-NovaPay 的目标应该是：多商户、多支付通道、多支付账号实例的通用支付网关。
+---
 
-## 必须剔除的模块
+## NovaPay 目标定位
 
-这些模块强绑定 `Sub2API` 业务，不建议直接借用：
+> 多商户、多支付通道、多支付账号实例的通用支付网关。
 
-- `src/lib/sub2api/*`
-- `src/app/pay/*`
-- `src/app/api/user/*`
-- `src/app/api/users/*`
-- `src/app/api/subscription-plans/*`
-- `src/app/api/subscriptions/*`
-- `src/app/api/orders/my/*`
-- `Channel`
-- `SubscriptionPlan`
-- `Order.userId / userEmail / userName / userNotes`
-- `createAndRedeem / assignSubscription / extendSubscription`
+每个商户在自己的控制台维护支付参数、IP 白名单、回调地址；平台只提供统一接口、签名校验、回调路由、退款能力、审计能力；不代持任何商户的收款资格。
 
-剔除原因：
+---
 
-- 它的订单主体是“平台用户充值”，不是“商户发起支付单”
-- 支付成功后的履约对象是 `Sub2API` 余额或订阅，不是商户业务系统
-- 前台页面的认证方式是 `Sub2API token`，不适合通用网关
+## 当前已实现的模块映射
 
-## 可以直接借鉴的结构
+下表对照当时的迁移计划与现在的实际落地：
 
-### 1. 支付 Provider 抽象
+| 早期计划 | 当前位置 | 状态 |
+|---|---|---|
+| Provider 抽象 | `lib/payments/plugins/types.ts` + `lib/payments/providers/*` | ✅ 已实现，并升级为可热插拔的「插件市场」架构 |
+| `GatewayChannel` / `ProviderAccount` / `MerchantChannelBinding` | `prisma/schema.prisma` 中的 `MerchantChannelAccount` + `MerchantChannelBinding` | ✅ 已实现（合并了 ProviderAccount 与 ChannelAccount） |
+| 系统配置中心 | `lib/system-config.ts` + `prisma SystemConfig` | ✅ 已实现，环境变量做兜底，DB 可在线覆盖，带 TTL 缓存 |
+| 订单状态机 | `lib/orders/service.ts` + `lib/orders/status.ts` | ✅ 已实现 `PENDING → PROCESSING → SUCCEEDED / FAILED / REFUNDED / CANCELLED` |
+| 商户签名验签 | `lib/merchants/api-auth.ts` + HMAC-SHA256 | ✅ 已实现（含 nonce 防重放、Idempotency-Key、IP 白名单、时间窗口） |
+| 商户回调投递与重试 | `lib/callbacks/service.ts` + `scripts/callback-retry-worker.ts` | ✅ 已实现（指数退避、`callbacks-worker` 进程） |
+| 退款流程 | `lib/refunds/service.ts` + `app/api/payment-orders/[orderReference]/refunds` | ✅ 已实现 |
+| 财务流水 / 余额快照 / 结算 | `lib/finance/*` + `scripts/finance-worker.ts` | ✅ 已实现（`finance-worker` 进程） |
+| 链上 USDT 到账匹配 | `lib/payments/onchain/*` + `scripts/onchain-worker.ts` | ✅ 已实现（BSC / Base / Solana） |
+| 多支付方式扩展 | 插件市场（`apps/registry/`） | ✅ 当时只想着写死 `wxpay.native`；现在演进成独立 Registry，第三方插件可以无需改网关代码动态接入 |
 
-参考：
+---
 
-- `src/lib/payment/types.ts`
-- `src/lib/payment/registry.ts`
-- `src/lib/payment/index.ts`
+## 跟早期设想的明显偏差
 
-NovaPay 应保留：
+实际工程中，有几处偏离了当年的迁移计划：
 
-- `PaymentProvider`
-- `createPayment`
-- `verifyNotification / parseNotification`
-- `queryOrder`
-- `refund`
-- provider registry
+**1. 不只支付通道，还做了完整的插件市场**
 
-NovaPay 需要改成：
+当时只想做支付通道扩展。后来发现「插件分发 + 签名校验 + 许可证 + 沙箱运行时 + 销售/分润」是一套完整产品，单独拆成了 `apps/registry`。
 
-- provider 不再围绕“平台用户充值”，而是围绕“商户订单”
-- 入参里包含 `merchant`、`paymentOrder`、`providerInstance`
-- 返回结构里明确区分 `checkoutUrl`、`formHtml`、`qrCode`、`sdkPayload`
+**2. 支付账号实例和通道绑定合并**
 
-### 2. 多实例支付账号配置
+早期想要 `GatewayChannel` / `ProviderAccount` / `MerchantChannelBinding` 三层。实际落地为：
 
-参考：
+- `MerchantChannelAccount`：商户在某个通道（如 `alipay.page`）下的实例配置
+- `MerchantChannelBinding`：决定某个商户的某个通道走哪个实例
 
-- `PaymentProviderInstance`
-- `src/lib/payment/load-balancer.ts`
-- `src/app/api/admin/provider-instances/route.ts`
+通道本身的元数据来自插件，不再单独建表。
 
-NovaPay 很值得保留这层，因为真实支付网关通常需要：
+**3. 多账号负载均衡延后**
 
-- 一个通道绑定多个账号
-- 不同商户路由到不同账号
-- 单账号限额
-- 故障转移和负载均衡
+当年规划的「单通道多账号 + 限额 + 故障转移」在第一版没做（每个商户一个通道实例就够用），等真正有客户场景再加。
 
-NovaPay 建议模型：
+**4. USDT 链上支付**
 
-- `GatewayChannel`
-- `ProviderAccount`
-- `MerchantChannelBinding`
+早期没考虑这条线。后来根据真实业务需求增加了 BSC / Base / Solana 三条链，包含锁价、精确金额分配、链上 worker 扫描配单。
 
-### 3. 系统配置中心
+---
 
-参考：
+## 推荐参考
 
-- `SystemConfig`
-- `src/lib/system-config.ts`
-- `src/app/api/admin/config/route.ts`
+- [README.zh-CN.md](../README.zh-CN.md) —— 当前架构概览
+- [production-runbook.md](./production-runbook.md) —— 生产部署
+- [merchant-integration-examples.md](./merchant-integration-examples.md) —— 商户接入示例
+- `apps/registry/README.md` —— 插件市场详细说明
 
-NovaPay 可以保留这套思想：
+---
 
-- 环境变量是默认值
-- 数据库配置可在线覆盖
-- 做短 TTL 缓存
+## 一句话总结
 
-NovaPay 适合放进去的配置：
-
-- 默认超时时间
-- 回调重试参数
-- 全局风控阈值
-- 渠道路由策略
-- 后台管理员配置
-
-### 4. 订单状态机
-
-参考：
-
-- `src/lib/order/service.ts`
-
-可以借鉴的是“支付确认”和“统一履约入口”这两个位置，但履约逻辑必须完全换掉。
-
-在 `sub2apipay` 里：
-
-- `PENDING -> PAID -> RECHARGING -> COMPLETED`
-
-在 NovaPay 里更适合变成：
-
-- `PENDING -> PROCESSING -> SUCCEEDED`
-- `PENDING -> FAILED`
-- `PENDING/PROCESSING -> CANCELLED`
-- `SUCCEEDED -> REFUND_PENDING -> REFUNDED`
-
-NovaPay 的履约不应是给平台余额充值，而应是：
-
-- 调商户回调
-- 写回调日志
-- 重试通知
-- 记录渠道侧状态
-
-## NovaPay 的推荐领域模型
-
-基于 `sub2apipay` 的优点，但去掉 `Sub2API` 耦合后，建议 NovaPay 逐步演进到这些表：
-
-### 核心业务
-
-- `Merchant`
-- `PaymentOrder`
-- `PaymentCallbackAttempt`
-- `RefundOrder`
-- `AuditLog`
-
-### 渠道与账号
-
-- `GatewayChannel`
-- `ProviderAccount`
-- `MerchantChannelBinding`
-
-### 配置
-
-- `SystemConfig`
-
-## 建议的数据结构方向
-
-### Merchant
-
-保留：
-
-- 商户基础信息
-- 商户编码
-- 回调域名
-- 签名密钥
-
-新增建议：
-
-- `status`
-- `notifySecret`
-- `allowedIps`
-
-### PaymentOrder
-
-当前 NovaPay 已有基础字段，接下来建议继续补：
-
-- `merchantOrderNo`
-- `merchantUserId`
-- `providerAccountId`
-- `notifyStatus`
-- `notifyCount`
-- `lastNotifyAt`
-- `expireAt`
-- `returnUrl`
-- `attach`
-
-### ProviderAccount
-
-建议字段：
-
-- `providerKey`
-- `channelCode`
-- `displayName`
-- `encryptedConfig`
-- `enabled`
-- `priority`
-- `rateLimitConfig`
-- `routingRule`
-
-### MerchantChannelBinding
-
-用于描述某个商户能不能用某个通道，以及走哪个账号池：
-
-- `merchantId`
-- `channelCode`
-- `enabled`
-- `defaultAccountId`
-- `allowedAccounts`
-- `feeRate`
-- `minAmount`
-- `maxAmount`
-
-## 服务层映射
-
-### sub2apipay 的 `createOrder`
-
-它负责：
-
-- 校验用户
-- 校验充值规则
-- 调 provider 创建支付
-- 写订单
-
-NovaPay 应改成：
-
-- 校验商户签名
-- 校验商户通道权限
-- 校验金额与币种
-- 选择渠道账号
-- 调 provider 创建支付
-- 保存订单、渠道响应、回调配置
-
-### sub2apipay 的 `confirmPayment`
-
-它负责：
-
-- 验签成功后更新订单为已支付
-- 触发充值 / 订阅履约
-
-NovaPay 应改成：
-
-- 验签成功后更新订单为 `SUCCEEDED`
-- 记录第三方交易号
-- 投递商户回调任务
-- 重试直到商户返回成功
-
-### sub2apipay 的 `executeFulfillment`
-
-这部分要完全替换。
-
-NovaPay 新版本应改为：
-
-- `dispatchMerchantNotify(orderId)`
-- `retryMerchantNotify(orderId)`
-- `markNotifyDelivered(orderId)`
-
-## API 层映射
-
-### 可以借鉴
-
-- 支付回调路由拆分方式
-- 管理后台配置 API 的组织形式
-- 渠道实例管理 API
-
-### 必须替换
-
-- 用户端基于 `token` 的订单创建
-- 所有直接查询 `Sub2API` 用户信息的接口
-
-NovaPay 建议公开 API：
-
-- `POST /api/payment-orders`
-- `POST /api/payment-orders/:orderReference`
-- `POST /api/payment-orders/:orderReference/close`
-- `POST /api/payment-orders/:orderReference/refunds`
-- `POST /api/payments/callback/alipay/:accountId/:token`
-- `POST /api/payments/callback/wxpay/:accountId/:token`
-
-NovaPay 建议管理 API：
-
-- `GET /api/admin/merchants`
-- `GET /api/admin/channels`
-- `GET /api/admin/provider-accounts`
-- `GET /api/admin/orders`
-- `GET /api/admin/callback-attempts`
-- `PUT /api/admin/system-config`
-
-## 对当前 NovaPay 的直接建议
-
-相比 `sub2apipay`，我们当前项目已经有：
-
-- `Merchant`
-- `PaymentOrder`
-- `alipay.page` provider
-- `POST /api/payment-orders`
-- `POST /api/payments/callback/alipay/:accountId/:token`
-
-下一步最值得先做的不是前台支付页，而是以下四件事：
-
-1. 增加 `ProviderAccount` 与 `SystemConfig`
-2. 给 `PaymentOrder` 增加回调投递字段
-3. 增加商户签名验签
-4. 做统一的商户回调投递服务
-
-## 推荐实施顺序
-
-第一阶段：支付网关内核
-
-- `ProviderAccount`
-- `SystemConfig`
-- 订单状态机
-- 渠道路由与账号选择
-
-第二阶段：商户集成能力
-
-- 商户签名
-- 商户回调投递
-- 回调重试与审计
-
-第三阶段：后台管理
-
-- 商户管理
-- 通道配置
-- 账号实例配置
-- 订单查询与统计
-
-第四阶段：扩展支付方式
-
-- 微信支付
-- 退款
-- 风控规则
-
-## 一句话判断
-
-`sub2apipay` 可以当作“支付引擎和后台结构参考”，不能当作“NovaPay 的业务模型模板”。
-
-NovaPay 要借的是：
-
-- provider 架构
-- 配置中心
-- 多实例路由
-- 订单状态机
-
-NovaPay 要删的是：
-
-- Sub2API 用户、余额、订阅、分组这整条业务线
+> `sub2apipay` 提供了第一版的形状；NovaPay 长成了一个独立的、商用规格的多商户支付网关 + 插件市场，跟 `sub2apipay` 的业务模型（用户充值 + 订阅）已经完全无关。

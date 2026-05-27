@@ -258,7 +258,7 @@ ADMIN_BOOTSTRAP_NAME="Platform Administrator"
 
 完整模板在 [`.env.docker-compose.example`](./.env.docker-compose.example)。
 
-`.env` 只放平台级配置。商户支付凭证应该存在 `MerchantChannelAccount` 表里，由 `NOVAPAY_DATA_ENCRYPTION_KEY` 静态加密。
+`.env` 只保留平台级配置。商户支付凭证应该存在 `MerchantChannelAccount` 表里，由 `NOVAPAY_DATA_ENCRYPTION_KEY` 静态加密。
 
 ---
 

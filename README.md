@@ -190,7 +190,7 @@ Behaviour notes:
 
 - The merchant must already be approved.
 - `x-novapay-nonce` must be globally unique; replays are rejected.
-- Merchants must not send `notifyUrl`; upstream callback URLs are generated per channel instance.
+- Merchants do not need to and must not send `notifyUrl`; upstream callback URLs are generated per channel instance.
 - `callbackUrl` overrides the merchant business callback if needed.
 - If `returnUrl` is omitted, NovaPay's hosted return page is used.
 
@@ -258,7 +258,7 @@ ADMIN_BOOTSTRAP_NAME="Platform Administrator"
 
 The full template lives in [`.env.docker-compose.example`](./.env.docker-compose.example).
 
-`.env` should hold platform settings only. Merchant payment credentials belong inside the `MerchantChannelAccount` table, encrypted at rest with `NOVAPAY_DATA_ENCRYPTION_KEY`.
+`.env` should hold platform-level settings, not merchant production payment secrets. Merchant payment credentials belong inside the `MerchantChannelAccount` table, encrypted at rest with `NOVAPAY_DATA_ENCRYPTION_KEY`.
 
 ---
 
