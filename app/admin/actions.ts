@@ -402,6 +402,14 @@ export async function logoutAdminAction() {
     summary: `管理员 ${session.adminUser.email} 退出后台。`,
   });
   await clearAdminSession();
+
+  const registryAppUrl = process.env.REGISTRY_APP_URL?.trim();
+  if (registryAppUrl) {
+    const logoutUrl = new URL("/api/internal/registry-sso/logout", registryAppUrl);
+    logoutUrl.searchParams.set("return", "/admin/login");
+    redirect(logoutUrl.toString());
+  }
+
   redirect("/admin/login");
 }
 
