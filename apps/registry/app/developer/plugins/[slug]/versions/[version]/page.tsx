@@ -40,7 +40,7 @@ export default async function DeveloperVersionDetailPage({
   const verificationProfile = bundle.pipelineResult.manifest.verificationProfile;
   const officialPlugin = isOfficialPluginSlug(slug);
   const developerId = session.actorKind === "DEVELOPER" ? session.actorId : null;
-  const canManage = canDeveloperManagePlugin(slug, developerId);
+  const canManage = await canDeveloperManagePlugin(slug, developerId);
   const content =
     locale === "en"
       ? {

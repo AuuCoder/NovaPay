@@ -103,7 +103,7 @@ export default async function DeveloperPluginsPage({
   const session = await requireRegistryUserSession();
   const locale = await getCurrentLocale();
   const state = await getRegistryRuntime();
-  const ownerships = listPluginOwnerships();
+  const ownerships = await listPluginOwnerships();
   const developerId = session.actorKind === "DEVELOPER" ? session.actorId : null;
   const params = (await searchParams) ?? {};
 
@@ -135,28 +135,32 @@ export default async function DeveloperPluginsPage({
   const keyword = keywordValue.trim().toLowerCase();
 
   const ownershipCount = ownerships.filter((item) => item.developerId === developerId).length;
-  const rows = state.catalog.map((plugin) => {
-    const mine = canDeveloperManagePlugin(plugin.slug, developerId);
-    const versions = listPluginVersionRecords(state, plugin.slug);
-    const currentVersionRecord = versions.find((record) => record.version === plugin.version) ?? versions[0] ?? null;
-    const latestSession = summarizeVerificationSession({
-      session:
-        listPluginVersionTestSessions({
-          state,
-          pluginSlug: plugin.slug,
-          version: plugin.version,
-        })[0] ?? null,
-      manifest: state.demoBundles.get(`${plugin.slug}@${plugin.version}`)?.pipelineResult.manifest ?? null,
-      officialPlugin: isOfficialPluginSlug(plugin.slug),
-    });
+  const rows = await Promise.all(
+    state.catalog.map(async (plugin) => {
+      const mine = await canDeveloperManagePlugin(plugin.slug, developerId);
+      const versions = listPluginVersionRecords(state, plugin.slug);
+      const currentVersionRecord =
+        versions.find((record) => record.version === plugin.version) ?? versions[0] ?? null;
+      const latestSession = summarizeVerificationSession({
+        session:
+          listPluginVersionTestSessions({
+            state,
+            pluginSlug: plugin.slug,
+            version: plugin.version,
+          })[0] ?? null,
+        manifest:
+          state.demoBundles.get(`${plugin.slug}@${plugin.version}`)?.pipelineResult.manifest ?? null,
+        officialPlugin: isOfficialPluginSlug(plugin.slug),
+      });
 
-    return {
-      plugin,
-      mine,
-      currentVersionRecord,
-      latestSession,
-    };
-  });
+      return {
+        plugin,
+        mine,
+        currentVersionRecord,
+        latestSession,
+      };
+    }),
+  );
 
   const filteredRows = rows.filter(({ plugin, mine }) => {
     const matchesFilter =

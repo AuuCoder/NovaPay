@@ -3,11 +3,9 @@ import {
   formatDateTime,
   getMerchantStatusLabel,
   getMerchantStatusTone,
-  type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
-  FlashMessage,
   LabeledField,
   StatusBadge,
   buttonClass,
@@ -21,14 +19,9 @@ import { loadMerchantDashboardData } from "@/app/merchant/(console)/dashboard-da
 import { getCurrentLocale } from "@/lib/i18n-server";
 import { getMerchantEditableName } from "@/lib/merchant-profile-completion";
 
-export default async function MerchantProfilePage({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
+export default async function MerchantProfilePage() {
   const locale = await getCurrentLocale();
   const {
-    messages,
     merchantDisplayName,
     merchant,
     canEditProfile,
@@ -37,7 +30,7 @@ export default async function MerchantProfilePage({
     canReadRefunds,
     profileMissingFields,
     isProfileComplete,
-  } = await loadMerchantDashboardData(searchParams, { locale });
+  } = await loadMerchantDashboardData({ locale });
 
   const content =
     locale === "en"
@@ -223,8 +216,6 @@ export default async function MerchantProfilePage({
           </div>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       {!isProfileComplete ? (
         <section className="rounded-[1.5rem] border border-[#f3d1ab] bg-[#fff4e7] p-5 text-sm text-[#8a4d18]">

@@ -1,11 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { apiError, resolveApiMessage, resolveRequestLocale } from "../api/response";
+import { getPrismaClient } from "../runtime/prisma-client";
 import type {
   DeveloperAccountStatus,
   DeveloperRecord,
@@ -26,46 +24,8 @@ import {
 
 const REGISTRY_SESSION_COOKIE = "nvreg_session";
 const REGISTRY_SESSION_MAX_AGE_SECONDS = 60 * 60 * 12;
-const REGISTRY_PROJECT_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-);
-const AUTH_STATE_FILE = path.join(
-  REGISTRY_PROJECT_ROOT,
-  ".tmp",
-  "registry-auth-state.json",
-);
 
 export type RegistrySessionActorKind = "DEVELOPER" | "ADMIN_SSO";
-
-export interface RegistrySessionRecord {
-  id: string;
-  actorKind: RegistrySessionActorKind;
-  actorId: string;
-  email: string;
-  displayName: string;
-  role: string | null;
-  createdAt: string;
-  lastSeenAt: string;
-  expiresAt: string;
-}
-
-interface PersistedDeveloperRecord extends Omit<DeveloperRecord, "createdAt" | "updatedAt"> {
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface PersistedEmailVerificationToken {
-  token: string;
-  developerId: string;
-}
-
-interface RegistryAuthStateSnapshot {
-  developers: PersistedDeveloperRecord[];
-  emailVerificationTokens: PersistedEmailVerificationToken[];
-  sessions: RegistrySessionRecord[];
-}
 
 export interface RegistrySession {
   id: string;
@@ -97,113 +57,136 @@ export interface RegistryDeveloperRegistrationInput {
   contact: Record<string, unknown>;
 }
 
+interface DeveloperRow {
+  id: string;
+  email: string;
+  passwordHash: string;
+  displayName: string;
+  contact: unknown;
+  status: DeveloperAccountStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface RegistrySessionRow {
+  id: string;
+  actorKind: string;
+  actorId: string;
+  email: string;
+  displayName: string;
+  role: string | null;
+  createdAt: Date;
+  lastSeenAt: Date;
+  expiresAt: Date;
+}
+
 function hashSessionToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function loadAuthState(): RegistryAuthStateSnapshot {
-  if (!existsSync(AUTH_STATE_FILE)) {
-    return {
-      developers: [],
-      emailVerificationTokens: [],
-      sessions: [],
-    };
-  }
-
-  try {
-    return JSON.parse(readFileSync(AUTH_STATE_FILE, "utf8")) as RegistryAuthStateSnapshot;
-  } catch {
-    return {
-      developers: [],
-      emailVerificationTokens: [],
-      sessions: [],
-    };
-  }
-}
-
-function saveAuthState(state: RegistryAuthStateSnapshot) {
-  mkdirSync(path.dirname(AUTH_STATE_FILE), { recursive: true });
-  writeFileSync(AUTH_STATE_FILE, JSON.stringify(state, null, 2), "utf8");
-}
-
-function toDeveloperRecord(record: PersistedDeveloperRecord): DeveloperRecord {
+function fromDeveloperRow(row: DeveloperRow): DeveloperRecord {
   return {
-    ...record,
-    createdAt: new Date(record.createdAt),
-    updatedAt: new Date(record.updatedAt),
+    id: row.id,
+    email: row.email,
+    passwordHash: row.passwordHash,
+    displayName: row.displayName,
+    contact: (row.contact ?? {}) as Record<string, unknown>,
+    status: row.status,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
-function toPersistedDeveloperRecord(record: DeveloperRecord): PersistedDeveloperRecord {
-  return {
-    ...record,
-    createdAt: record.createdAt.toISOString(),
-    updatedAt: record.updatedAt.toISOString(),
+async function getPrismaOrThrow() {
+  const prisma = await getPrismaClient();
+  if (!prisma) {
+    throw new Error("Registry database is not available.");
+  }
+  return prisma as unknown as {
+    developer: {
+      findUnique(args: unknown): Promise<DeveloperRow | null>;
+      findFirst(args: unknown): Promise<DeveloperRow | null>;
+      create(args: unknown): Promise<DeveloperRow>;
+      update(args: unknown): Promise<DeveloperRow>;
+    };
+    emailVerificationToken: {
+      create(args: unknown): Promise<unknown>;
+      findUnique(args: unknown): Promise<{ developerId: string } | null>;
+      delete(args: unknown): Promise<unknown>;
+    };
+    registrySession: {
+      create(args: unknown): Promise<RegistrySessionRow>;
+      findUnique(args: unknown): Promise<RegistrySessionRow | null>;
+      update(args: unknown): Promise<RegistrySessionRow>;
+      delete(args: unknown): Promise<RegistrySessionRow | null>;
+      deleteMany(args: unknown): Promise<unknown>;
+    };
   };
 }
 
-function createPersistentDeveloperAuthStore(): DeveloperAuthStore {
+function createPrismaDeveloperAuthStore(): DeveloperAuthStore {
   return {
     async findByEmail(email) {
-      const state = loadAuthState();
-      const record = state.developers.find(
-        (item) => item.email === email.trim().toLowerCase(),
-      );
-      return record ? toDeveloperRecord(record) : null;
+      const prisma = await getPrismaOrThrow();
+      const row = await prisma.developer.findUnique({
+        where: { email: email.trim().toLowerCase() },
+      });
+      return row ? fromDeveloperRow(row) : null;
     },
     async findById(id) {
-      const state = loadAuthState();
-      const record = state.developers.find((item) => item.id === id);
-      return record ? toDeveloperRecord(record) : null;
+      const prisma = await getPrismaOrThrow();
+      const row = await prisma.developer.findUnique({ where: { id } });
+      return row ? fromDeveloperRow(row) : null;
     },
     async create(record) {
-      const state = loadAuthState();
-      state.developers.push(toPersistedDeveloperRecord(record));
-      saveAuthState(state);
-      return record;
+      const prisma = await getPrismaOrThrow();
+      const row = await prisma.developer.create({
+        data: {
+          id: record.id,
+          email: record.email,
+          passwordHash: record.passwordHash,
+          displayName: record.displayName,
+          contact: record.contact,
+          status: record.status,
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        },
+      });
+      return fromDeveloperRow(row);
     },
     async updateStatus(id, status) {
-      const state = loadAuthState();
-      const index = state.developers.findIndex((item) => item.id === id);
-
-      if (index < 0) {
-        throw new Error(`Developer not found: ${id}`);
-      }
-
-      const updated: PersistedDeveloperRecord = {
-        ...state.developers[index],
-        status,
-        updatedAt: new Date().toISOString(),
-      };
-
-      state.developers[index] = updated;
-      saveAuthState(state);
-      return toDeveloperRecord(updated);
+      const prisma = await getPrismaOrThrow();
+      const row = await prisma.developer.update({
+        where: { id },
+        data: { status },
+      });
+      return fromDeveloperRow(row);
     },
   };
 }
 
-function createPersistentEmailVerificationStore(): EmailVerificationStore {
+function createPrismaEmailVerificationStore(): EmailVerificationStore {
   return {
     async createToken(developerId) {
-      const state = loadAuthState();
+      const prisma = await getPrismaOrThrow();
       const token = randomBytes(24).toString("base64url");
-      state.emailVerificationTokens.push({ token, developerId });
-      saveAuthState(state);
+      await prisma.emailVerificationToken.create({
+        data: { token, developerId },
+      });
       return token;
     },
     async consumeToken(token) {
-      const state = loadAuthState();
-      const index = state.emailVerificationTokens.findIndex((item) => item.token === token);
-
-      if (index < 0) {
+      const prisma = await getPrismaOrThrow();
+      const row = await prisma.emailVerificationToken.findUnique({
+        where: { token },
+      });
+      if (!row) {
         return null;
       }
-
-      const developerId = state.emailVerificationTokens[index]?.developerId ?? null;
-      state.emailVerificationTokens.splice(index, 1);
-      saveAuthState(state);
-      return developerId;
+      await prisma.emailVerificationToken
+        .delete({ where: { token } })
+        .catch(() => null);
+      return row.developerId;
     },
   };
 }
@@ -232,51 +215,54 @@ function parseCookieHeader(
     }, {});
 }
 
-function toRegistrySession(record: RegistrySessionRecord): RegistrySession {
+function fromSessionRow(row: RegistrySessionRow): RegistrySession {
   return {
-    ...record,
-    createdAt: new Date(record.createdAt),
-    lastSeenAt: new Date(record.lastSeenAt),
-    expiresAt: new Date(record.expiresAt),
+    id: row.id,
+    actorKind: row.actorKind === "ADMIN_SSO" ? "ADMIN_SSO" : "DEVELOPER",
+    actorId: row.actorId,
+    email: row.email,
+    displayName: row.displayName,
+    role: row.role,
+    createdAt: row.createdAt,
+    lastSeenAt: row.lastSeenAt,
+    expiresAt: row.expiresAt,
   };
 }
 
-function lookupSessionByToken(token: string | null | undefined) {
+async function lookupSessionByToken(token: string | null | undefined) {
   if (!token) {
     return null;
   }
 
-  const state = loadAuthState();
+  const prisma = await getPrismaOrThrow();
   const tokenHash = hashSessionToken(token);
-  const record = state.sessions.find((item) => item.id === tokenHash);
+  const row = await prisma.registrySession.findUnique({ where: { id: tokenHash } });
 
-  if (!record) {
+  if (!row) {
     return null;
   }
 
-  const now = Date.now();
-  const expiresAt = new Date(record.expiresAt).getTime();
-
-  if (!Number.isFinite(expiresAt) || expiresAt <= now) {
-    state.sessions = state.sessions.filter((item) => item.id !== tokenHash);
-    saveAuthState(state);
+  const now = new Date();
+  if (row.expiresAt.getTime() <= now.getTime()) {
+    await prisma.registrySession.delete({ where: { id: tokenHash } }).catch(() => null);
     return null;
   }
 
-  const updated: RegistrySessionRecord = {
-    ...record,
-    lastSeenAt: new Date().toISOString(),
-  };
-  state.sessions = state.sessions.map((item) => (item.id === tokenHash ? updated : item));
-  saveAuthState(state);
-  return toRegistrySession(updated);
+  await prisma.registrySession
+    .update({
+      where: { id: tokenHash },
+      data: { lastSeenAt: now },
+    })
+    .catch(() => null);
+
+  return fromSessionRow({ ...row, lastSeenAt: now });
 }
 
 export async function registerRegistryDeveloper(
   input: RegistryDeveloperRegistrationInput,
 ) {
-  const store = createPersistentDeveloperAuthStore();
-  const emailStore = createPersistentEmailVerificationStore();
+  const store = createPrismaDeveloperAuthStore();
+  const emailStore = createPrismaEmailVerificationStore();
   const result = await registerDeveloper(input, store, emailStore);
 
   if (!result.success || !result.developer) {
@@ -294,7 +280,7 @@ export async function loginRegistryDeveloper(input: {
   email: string;
   password: string;
 }) {
-  const store = createPersistentDeveloperAuthStore();
+  const store = createPrismaDeveloperAuthStore();
   return loginDeveloper(input, store);
 }
 
@@ -305,27 +291,31 @@ export async function createRegistrySession(input: {
   displayName: string;
   role?: string | null;
 }) {
-  const state = loadAuthState();
+  const prisma = await getPrismaOrThrow();
   const token = randomBytes(32).toString("base64url");
   const tokenHash = hashSessionToken(token);
   const now = new Date();
-  const session: RegistrySessionRecord = {
-    id: tokenHash,
-    actorKind: input.actorKind,
-    actorId: input.actorId,
-    email: input.email.trim().toLowerCase(),
-    displayName: input.displayName.trim(),
-    role: input.role ?? null,
-    createdAt: now.toISOString(),
-    lastSeenAt: now.toISOString(),
-    expiresAt: new Date(
-      now.getTime() + REGISTRY_SESSION_MAX_AGE_SECONDS * 1000,
-    ).toISOString(),
-  };
+  const expiresAt = new Date(now.getTime() + REGISTRY_SESSION_MAX_AGE_SECONDS * 1000);
 
-  state.sessions = state.sessions.filter((item) => item.id !== tokenHash);
-  state.sessions.push(session);
-  saveAuthState(state);
+  // For ADMIN_SSO sessions there's no Developer to FK to; use null.
+  const developerId = input.actorKind === "DEVELOPER" ? input.actorId : null;
+
+  // Upsert-like: delete existing then create (race-safe enough for cookie sessions).
+  await prisma.registrySession.delete({ where: { id: tokenHash } }).catch(() => null);
+  const row = await prisma.registrySession.create({
+    data: {
+      id: tokenHash,
+      actorKind: input.actorKind,
+      actorId: input.actorId,
+      developerId,
+      email: input.email.trim().toLowerCase(),
+      displayName: input.displayName.trim(),
+      role: input.role ?? null,
+      createdAt: now,
+      lastSeenAt: now,
+      expiresAt,
+    },
+  });
 
   const cookieStore = await cookies();
   cookieStore.set(REGISTRY_SESSION_COOKIE, token, {
@@ -336,7 +326,7 @@ export async function createRegistrySession(input: {
     maxAge: REGISTRY_SESSION_MAX_AGE_SECONDS,
   });
 
-  return toRegistrySession(session);
+  return fromSessionRow(row);
 }
 
 export async function clearRegistrySession() {
@@ -345,9 +335,10 @@ export async function clearRegistrySession() {
 
   if (token) {
     const tokenHash = hashSessionToken(token);
-    const state = loadAuthState();
-    state.sessions = state.sessions.filter((item) => item.id !== tokenHash);
-    saveAuthState(state);
+    const prisma = await getPrismaOrThrow();
+    await prisma.registrySession
+      .delete({ where: { id: tokenHash } })
+      .catch(() => null);
   }
 
   cookieStore.set(REGISTRY_SESSION_COOKIE, "", {
@@ -513,17 +504,13 @@ export async function requireRegistryAdminRequest(request: Request) {
 }
 
 export async function findRegistryDeveloperByEmail(email: string) {
-  const state = loadAuthState();
-  const record = state.developers.find(
-    (item) => item.email === email.trim().toLowerCase(),
-  );
-  return record ? toDeveloperRecord(record) : null;
+  const store = createPrismaDeveloperAuthStore();
+  return store.findByEmail(email);
 }
 
 export async function findRegistryDeveloperById(id: string) {
-  const state = loadAuthState();
-  const record = state.developers.find((item) => item.id === id);
-  return record ? toDeveloperRecord(record) : null;
+  const store = createPrismaDeveloperAuthStore();
+  return store.findById(id);
 }
 
 export function getRegistryDeveloperStatusLabel(status: DeveloperAccountStatus) {

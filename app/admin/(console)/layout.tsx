@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { logoutAdminAction } from "@/app/admin/actions";
+import { FlashToast } from "@/app/admin/flash-toast";
 import { AdminNav, type AdminNavItem } from "@/app/admin/nav";
 import { getAdminDisplayRole, requireAdminSession } from "@/lib/admin-session";
 import { getCurrentLocale } from "@/lib/i18n-server";
@@ -169,6 +170,7 @@ export default async function AdminConsoleLayout({
 
   return (
     <main className="flex min-h-screen w-full flex-col px-2 py-2 sm:px-3 sm:py-3 lg:px-4 lg:py-4">
+      <FlashToast locale={locale} />
       <div className="grid min-h-[calc(100vh-1rem)] gap-2 sm:min-h-[calc(100vh-1.5rem)] sm:gap-3 lg:min-h-[calc(100vh-2rem)] lg:grid-cols-[248px_minmax(0,1fr)]">
         <aside className="rounded-[1.75rem] border border-line bg-[#1f1812] p-5 text-[#f8efe6] shadow-[0_22px_80px_rgba(20,15,10,0.26)]">
           <Link href="/" className="inline-flex items-center rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.28em] text-[#dac7b3]">

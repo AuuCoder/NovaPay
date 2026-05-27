@@ -37,10 +37,6 @@ import { getSettlementSettings } from "../settlement/settings";
 export function createPrismaStores(prisma: PrismaClientLike) {
   return {
     signingKeyStore: createPrismaSigningKeyStore(prisma),
-    revocationStore: createPrismaRevocationStore(prisma),
-    licenseStore: createPrismaLicenseStore(prisma),
-    orderStore: createPrismaOrderStore(prisma),
-    ledger: createPrismaBalanceLedger(prisma),
     auditLogger: createPrismaAuditLogger(prisma),
     consumerLookup: createPrismaConsumerLookup(prisma),
   };

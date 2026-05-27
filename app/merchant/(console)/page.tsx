@@ -9,11 +9,9 @@ import {
   getPaymentStatusLabel,
   getPaymentStatusTone,
   getRefundStatusLabel,
-  type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
-  FlashMessage,
   StatCard,
   StatusBadge,
   buttonClass,
@@ -32,14 +30,9 @@ import {
 import { loadMerchantDashboardData } from "@/app/merchant/(console)/dashboard-data";
 import { getCurrentLocale } from "@/lib/i18n-server";
 
-export default async function MerchantDashboardPage({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
+export default async function MerchantDashboardPage() {
   const locale = await getCurrentLocale();
   const {
-    messages,
     credentialReveal,
     merchant,
     merchantDisplayName,
@@ -58,7 +51,7 @@ export default async function MerchantDashboardPage({
     hasAnyChannelAccount,
     hasEnabledChannelAccount,
     checkoutTestChannels,
-  } = await loadMerchantDashboardData(searchParams, { locale });
+  } = await loadMerchantDashboardData({ locale });
 
   const content =
     locale === "en"
@@ -464,8 +457,6 @@ export default async function MerchantDashboardPage({
           </div>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       {activeCredentialReveal ? (
         <section className="rounded-[1.75rem] border border-[#c9dfd5] bg-[linear-gradient(135deg,#f3fbf7_0%,#eef7ff_100%)] p-5 shadow-[0_18px_50px_rgba(29,87,70,0.08)] sm:p-6">

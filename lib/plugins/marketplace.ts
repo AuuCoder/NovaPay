@@ -249,13 +249,17 @@ async function upsertBuiltinMarketplacePlugin(plugin: PaymentPluginDefinition) {
   const prisma = getPrismaClient();
   const summary = plugin.provider.getSummary();
 
-  await prisma.marketplacePlugin.upsert({
+  // Built-in seed only refreshes BUILTIN-classified rows. If the row has
+  // already been re-classified as REMOTE_SIGNED (because it is also published
+  // through the remote registry, e.g. paid plugins), the remote registry sync
+  // owns its `installed` / `enabled` state and we must not flip it back on.
+  await prisma.marketplacePlugin.updateMany({
     where: {
       slug: plugin.marketplace.slug,
-    },
-    update: {
-      kind: PAYMENT_PLUGIN_KIND,
       source: BUILTIN_PLUGIN_SOURCE,
+    },
+    data: {
+      kind: PAYMENT_PLUGIN_KIND,
       channelCode: plugin.channelCode,
       providerKey: plugin.providerKey,
       packageName: plugin.marketplace.packageName,
@@ -271,6 +275,15 @@ async function upsertBuiltinMarketplacePlugin(plugin: PaymentPluginDefinition) {
       installedAt: new Date(),
       lastSyncedAt: new Date(),
     },
+  });
+
+  // If the row does not exist at all, create it as a BUILTIN entry. The
+  // remote registry sync runs after this and may reclassify it.
+  await prisma.marketplacePlugin.upsert({
+    where: {
+      slug: plugin.marketplace.slug,
+    },
+    update: {},
     create: {
       slug: plugin.marketplace.slug,
       kind: PAYMENT_PLUGIN_KIND,
@@ -293,6 +306,53 @@ async function upsertBuiltinMarketplacePlugin(plugin: PaymentPluginDefinition) {
   });
 }
 
+async function reconcileBuiltinPaidRemotePluginInstallState() {
+  // One-time / idempotent reconciliation: if a slug is already classified as
+  // REMOTE_SIGNED + PAID but never produced a real PluginPackageInstall, the
+  // `installed=true` flag is leftover from when the slug used to be a BUILTIN
+  // row (before the remote registry started selling the same slug). Reset
+  // those rows so the admin UI no longer claims the paid plugin is installed.
+  const prisma = getPrismaClient();
+  const candidates = await prisma.marketplacePlugin.findMany({
+    where: {
+      source: "REMOTE_SIGNED",
+      pricingMode: "PAID",
+      installed: true,
+      purchasedAt: null,
+    },
+    select: { slug: true },
+  });
+
+  if (candidates.length === 0) {
+    return;
+  }
+
+  const installs = await prisma.pluginPackageInstall.findMany({
+    where: {
+      pluginSlug: { in: candidates.map((row) => row.slug) },
+      status: { in: ["DOWNLOADED", "VALIDATED"] satisfies PluginPackageInstallStatus[] },
+    },
+    select: { pluginSlug: true },
+  });
+  const installedSlugs = new Set(installs.map((row) => row.pluginSlug));
+  const stale = candidates
+    .map((row) => row.slug)
+    .filter((slug) => !installedSlugs.has(slug));
+
+  if (stale.length === 0) {
+    return;
+  }
+
+  await prisma.marketplacePlugin.updateMany({
+    where: { slug: { in: stale } },
+    data: {
+      installed: false,
+      enabled: false,
+      installedAt: null,
+    },
+  });
+}
+
 async function runBuiltinMarketplaceSync() {
   const plugins = listBuiltinPaymentPlugins();
   await Promise.all(plugins.map((plugin) => upsertBuiltinMarketplacePlugin(plugin)));
@@ -301,6 +361,28 @@ async function runBuiltinMarketplaceSync() {
 async function syncRemoteMarketplaceRegistry() {
   const prisma = getPrismaClient();
   const snapshots = await fetchRemoteRegistrySnapshots();
+
+  // Look up each affected slug's pre-update state so we can detect a
+  // BUILTIN -> REMOTE_SIGNED reclassification (e.g. an officially built-in
+  // plugin that is now also sold as a paid remote plugin). Without this, the
+  // builtin's `installed: true / enabled: true` would carry over and falsely
+  // mark a paid plugin as already installed.
+  const allSlugs = snapshots.flatMap((snapshot) =>
+    snapshot.plugins.map((plugin) => plugin.slug),
+  );
+  const existingRows = allSlugs.length
+    ? await prisma.marketplacePlugin.findMany({
+        where: { slug: { in: allSlugs } },
+        select: {
+          slug: true,
+          source: true,
+          installed: true,
+          enabled: true,
+          purchasedAt: true,
+        },
+      })
+    : [];
+  const existingBySlug = new Map(existingRows.map((row) => [row.slug, row]));
 
   await Promise.all(
     snapshots.flatMap((snapshot) => [
@@ -312,8 +394,30 @@ async function syncRemoteMarketplaceRegistry() {
           lastSyncAt: new Date(),
         },
       }),
-      ...snapshot.plugins.map((plugin) =>
-        prisma.marketplacePlugin.upsert({
+      ...snapshot.plugins.map((plugin) => {
+        const existing = existingBySlug.get(plugin.slug);
+        const isReclassifiedFromBuiltin =
+          !!existing && existing.source === "BUILTIN" && plugin.source !== "BUILTIN";
+        // Promote BUILTIN -> REMOTE_SIGNED: the remote plugin has not been
+        // purchased + downloaded yet, so reset install state and require
+        // the admin to go through the marketplace purchase flow.
+        const installResetPatch =
+          isReclassifiedFromBuiltin && plugin.pricingMode === "PAID"
+            ? {
+                installed: false,
+                enabled: false,
+                installedAt: null,
+                purchasedAt: null,
+              }
+            : isReclassifiedFromBuiltin
+              ? {
+                  installed: false,
+                  enabled: false,
+                  installedAt: null,
+                }
+              : {};
+
+        return prisma.marketplacePlugin.upsert({
           where: {
             slug: plugin.slug,
           },
@@ -346,6 +450,7 @@ async function syncRemoteMarketplaceRegistry() {
             } as Prisma.InputJsonObject,
             trusted: true,
             lastSyncedAt: new Date(),
+            ...installResetPatch,
           },
           create: {
             slug: plugin.slug,
@@ -380,8 +485,8 @@ async function syncRemoteMarketplaceRegistry() {
             enabled: false,
             lastSyncedAt: new Date(),
           },
-        }),
-      ),
+        });
+      }),
     ]),
   );
 }
@@ -403,6 +508,7 @@ export async function syncBuiltinMarketplacePlugins(force = false) {
     // REMOTE_SIGNED rows for the same official plugin slugs.
     await runBuiltinMarketplaceSync();
     await syncRemoteMarketplaceRegistry();
+    await reconcileBuiltinPaidRemotePluginInstallState();
   })()
     .then(() => {
       lastMarketplaceSyncAt = Date.now();

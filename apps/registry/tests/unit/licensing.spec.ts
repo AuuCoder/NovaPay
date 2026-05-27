@@ -12,12 +12,8 @@ import { issueLicense } from "../../lib/licensing/issuer";
 import { verifyLicense } from "../../lib/licensing/verifier";
 import {
   createInMemoryRevocationStore,
-  createPersistentRevocationStore,
   revokeLicense,
 } from "../../lib/licensing/revocation";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 async function setupSigningEnvironment() {
   const keyStore = createInMemorySigningKeyStore();
@@ -288,32 +284,5 @@ describe("revocation store", () => {
     );
     assert.equal(second.success, false);
     assert.equal(second.errorCode, "ALREADY_REVOKED");
-  });
-
-  it("persists revocations across store re-instantiation", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "nvreg-revocations-"));
-    const filePath = path.join(tempDir, "revocations.json");
-
-    try {
-      const store = createPersistentRevocationStore(filePath);
-      const first = await revokeLicense(
-        {
-          licenseId: "lic-1",
-          licenseKeyHash: "deadbeef",
-          reason: "test",
-          revokedById: "admin-1",
-        },
-        store,
-      );
-      assert.equal(first.success, true);
-
-      const reloaded = createPersistentRevocationStore(filePath);
-      assert.equal(await reloaded.isRevoked("deadbeef"), true);
-      const listed = await reloaded.list();
-      assert.equal(listed.length, 1);
-      assert.equal(listed[0]?.licenseId, "lic-1");
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 });

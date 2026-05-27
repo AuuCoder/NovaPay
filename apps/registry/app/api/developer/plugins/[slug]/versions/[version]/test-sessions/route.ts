@@ -21,7 +21,7 @@ export async function GET(
   }
 
   if (auth.actor.kind === "SESSION" && auth.actor.session.actorKind === "DEVELOPER") {
-    if (!canDeveloperManagePlugin((await params).slug, auth.actor.session.actorId)) {
+    if (!(await canDeveloperManagePlugin((await params).slug, auth.actor.session.actorId))) {
       return apiError(request, "NOT_OWNER", 403);
     }
   }
@@ -52,8 +52,8 @@ export async function POST(
 
   const { slug, version } = await params;
   try {
-    assertPluginOwnership(slug, auth.actor.session.actorId);
-  } catch (error) {
+    await assertPluginOwnership(slug, auth.actor.session.actorId);
+  } catch {
     return apiError(request, "NOT_OWNER", 403);
   }
   const state = await getRegistryRuntime();

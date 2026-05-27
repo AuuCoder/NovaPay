@@ -1,17 +1,16 @@
+/**
+ * Persistence for local Ed25519 signing key material.
+ *
+ * Private key bytes are sealed via secret-box (AES-GCM) before storing.
+ * Production keeps the keys in `SigningKeyMaterial`; the schema mirrors
+ * `SigningKey` so retrieving an active key always co-locates the public
+ * record with its private material.
+ */
+
 import { createPrivateKey, type KeyObject } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { RotationKeyPair } from "./rotation";
 import { migrateStoredSecret, revealStoredSecret } from "../security/secret-box";
-
-interface PersistedSigningMaterialRecord {
-  keyId: string;
-  publicKey: string;
-  kmsKeyArn: string | null;
-  privateKeyCiphertext: string | null;
-  createdAt: string;
-}
+import { getPrismaClient } from "../runtime/prisma-client";
 
 export interface LocalSigningMaterialRecord {
   keyId: string;
@@ -21,16 +20,20 @@ export interface LocalSigningMaterialRecord {
   createdAt: Date;
 }
 
-const REGISTRY_PROJECT_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-);
-const SIGNING_MATERIAL_FILE = path.join(
-  REGISTRY_PROJECT_ROOT,
-  ".tmp",
-  "registry-signing-materials.json",
-);
+interface SigningKeyMaterialRow {
+  keyId: string;
+  publicKey: string;
+  kmsKeyArn: string | null;
+  privateKeySealed: string | null;
+  createdAt: Date;
+}
+
+interface PrismaSigningMaterialLike {
+  signingKeyMaterial: {
+    upsert(args: unknown): Promise<unknown>;
+    findUnique(args: unknown): Promise<unknown>;
+  };
+}
 
 function toPrivateKeyPem(privateKey: KeyObject) {
   return privateKey.export({
@@ -39,56 +42,56 @@ function toPrivateKeyPem(privateKey: KeyObject) {
   }) as string;
 }
 
-function toPersisted(pair: RotationKeyPair): PersistedSigningMaterialRecord {
-  return {
-    keyId: pair.keyId,
-    publicKey: pair.publicKey,
-    kmsKeyArn: pair.kmsKeyArn,
-    privateKeyCiphertext: pair.privateKey
-      ? migrateStoredSecret(toPrivateKeyPem(pair.privateKey))
-      : null,
-    createdAt: new Date().toISOString(),
-  };
+async function getPrismaMaterial(): Promise<PrismaSigningMaterialLike | null> {
+  const prisma = (await getPrismaClient()) as unknown as PrismaSigningMaterialLike | null;
+  if (!prisma || !prisma.signingKeyMaterial) return null;
+  return prisma;
 }
 
-function fromPersisted(record: PersistedSigningMaterialRecord): LocalSigningMaterialRecord {
-  const privateKeyPem = revealStoredSecret(record.privateKeyCiphertext);
+export async function persistLocalSigningKeyPair(pair: RotationKeyPair) {
+  const prisma = await getPrismaMaterial();
+  if (!prisma) {
+    throw new Error("Registry database is not available; cannot persist signing key material.");
+  }
+
+  const sealedPrivateKey = pair.privateKey
+    ? migrateStoredSecret(toPrivateKeyPem(pair.privateKey))
+    : null;
+
+  await prisma.signingKeyMaterial.upsert({
+    where: { keyId: pair.keyId },
+    create: {
+      keyId: pair.keyId,
+      publicKey: pair.publicKey,
+      kmsKeyArn: pair.kmsKeyArn,
+      privateKeySealed: sealedPrivateKey,
+    },
+    update: {
+      publicKey: pair.publicKey,
+      kmsKeyArn: pair.kmsKeyArn,
+      privateKeySealed: sealedPrivateKey,
+    },
+  });
+}
+
+export async function loadLocalSigningMaterialByKeyId(
+  keyId: string,
+): Promise<LocalSigningMaterialRecord | null> {
+  const prisma = await getPrismaMaterial();
+  if (!prisma) return null;
+
+  const row = (await prisma.signingKeyMaterial.findUnique({
+    where: { keyId },
+  })) as SigningKeyMaterialRow | null;
+
+  if (!row) return null;
+
+  const privateKeyPem = revealStoredSecret(row.privateKeySealed);
   return {
-    keyId: record.keyId,
-    publicKey: record.publicKey,
-    kmsKeyArn: record.kmsKeyArn,
+    keyId: row.keyId,
+    publicKey: row.publicKey,
+    kmsKeyArn: row.kmsKeyArn,
     privateKey: privateKeyPem ? createPrivateKey(privateKeyPem) : null,
-    createdAt: new Date(record.createdAt),
+    createdAt: row.createdAt,
   };
-}
-
-function loadRecords() {
-  if (!existsSync(SIGNING_MATERIAL_FILE)) {
-    return [] as PersistedSigningMaterialRecord[];
-  }
-
-  try {
-    return JSON.parse(
-      readFileSync(SIGNING_MATERIAL_FILE, "utf8"),
-    ) as PersistedSigningMaterialRecord[];
-  } catch {
-    return [] as PersistedSigningMaterialRecord[];
-  }
-}
-
-function saveRecords(records: PersistedSigningMaterialRecord[]) {
-  mkdirSync(path.dirname(SIGNING_MATERIAL_FILE), { recursive: true });
-  writeFileSync(SIGNING_MATERIAL_FILE, JSON.stringify(records, null, 2), "utf8");
-}
-
-export function persistLocalSigningKeyPair(pair: RotationKeyPair) {
-  const records = loadRecords();
-  const next = records.filter((item) => item.keyId !== pair.keyId);
-  next.push(toPersisted(pair));
-  saveRecords(next);
-}
-
-export function loadLocalSigningMaterialByKeyId(keyId: string) {
-  const record = loadRecords().find((item) => item.keyId === keyId);
-  return record ? fromPersisted(record) : null;
 }

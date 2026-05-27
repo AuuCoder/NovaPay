@@ -308,7 +308,7 @@ export function SalesManager(props: {
                   <p className="risk-kpi-label">{props.labels.status}</p>
                   <p className="risk-kpi-value">{payoutStatusLabel(request.state)}</p>
                   <p className="text-body-sm text-body-color">{formatCny(request.amountCents)}</p>
-                  <p className="text-caption">{new Date(request.createdAt).toLocaleString(props.locale === "en" ? "en-US" : "zh-CN")}</p>
+                  <p className="text-caption">{new Date(request.createdAt).toLocaleString(props.locale === "en" ? "en-US" : "zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>
                 </div>
               ))
             )}
@@ -348,6 +348,7 @@ export function SalesManager(props: {
                     <td className="text-body-sm text-body-color">
                       {new Date(entry.occurredAt).toLocaleString(
                         props.locale === "en" ? "en-US" : "zh-CN",
+                        { timeZone: "Asia/Shanghai", hour12: false },
                       )}
                     </td>
                     <td style={{ textAlign: "right", fontWeight: 600 }}>
@@ -405,6 +406,7 @@ export function SalesManager(props: {
                     <td className="text-body-sm text-body-color">
                       {new Date(order.createdAt).toLocaleString(
                         props.locale === "en" ? "en-US" : "zh-CN",
+                        { timeZone: "Asia/Shanghai", hour12: false },
                       )}
                     </td>
                     <td style={{ textAlign: "right", fontWeight: 600 }}>

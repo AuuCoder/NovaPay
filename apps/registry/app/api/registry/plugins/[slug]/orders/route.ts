@@ -83,7 +83,7 @@ export async function POST(
     {
       pluginSlug: slug,
       pluginId: slug, // In-memory; production uses the real PluginRecord.id
-      developerId: getPluginOwner(slug) ?? "novapay-official",
+      developerId: (await getPluginOwner(slug)) ?? "novapay-official",
       version: plugin.version,
       buyerInstanceId: instanceId,
       buyerMerchantId: merchantId,

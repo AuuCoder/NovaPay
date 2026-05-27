@@ -32,6 +32,8 @@
 *.keystore
 *.mobileprovision
 *.sql
+!prisma/migrations/**/*.sql
+!apps/registry/prisma/migrations/**/*.sql
 *.dump
 *.bak
 *.backup
@@ -67,4 +69,5 @@ next-env.d.ts
 # registry runtime / dev artifacts
 /.tmp
 /apps/registry/.tmp
+/runtime/plugins
 /artifacts

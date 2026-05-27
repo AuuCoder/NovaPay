@@ -1,13 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 import {
   buildPackageObjectKey,
-  createFileObjectStore,
   createInMemoryObjectStore,
   createObjectStoreClient,
   DEFAULT_DOWNLOAD_PRESIGN_EXPIRES_IN_SECONDS,
@@ -159,35 +155,6 @@ describe("createInMemoryObjectStore", () => {
   });
 });
 
-describe("createFileObjectStore", () => {
-  it("persists stored objects across client re-instantiation", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "nvreg-object-store-"));
-
-    try {
-      const body = Buffer.from("persist-me", "utf8");
-      const sha = sha256Hex(body);
-      const key = buildPackageObjectKey(sha, "tar.gz");
-
-      const first = createFileObjectStore({ rootDir: tempDir });
-      await first.put({
-        key,
-        body,
-        contentType: "application/gzip",
-        contentLength: body.length,
-        sha256: sha,
-      });
-
-      const second = createFileObjectStore({ rootDir: tempDir });
-      assert.equal(await second.exists(key), true);
-      const loaded = await second.get?.(key);
-      assert.ok(loaded);
-      assert.equal(loaded?.body.toString("utf8"), "persist-me");
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-});
-
 describe("createObjectStoreClient driver dispatch", () => {
   it("returns the in-memory driver when OBJECT_STORE_DRIVER=memory", async () => {
     const previous = process.env.OBJECT_STORE_DRIVER;
@@ -212,20 +179,31 @@ describe("createObjectStoreClient driver dispatch", () => {
     }
   });
 
-  it("returns the file-backed driver by default", async () => {
+  it("requires bucket and credentials when no memory driver is selected", () => {
     const previous = process.env.OBJECT_STORE_DRIVER;
     delete process.env.OBJECT_STORE_DRIVER;
     try {
-      const client = createObjectStoreClient({
-        bucket: "novapay-registry-packages",
-        region: "us-east-1",
-        accessKeyId: "test",
-        secretAccessKey: "test",
-      });
-      const presigned = await client.presignDownload({
-        key: "packages/default.tar.gz",
-      });
-      assert.match(presigned.url, /^http:\/\/file-object-store\.local\//);
+      assert.throws(
+        () =>
+          createObjectStoreClient({
+            bucket: "",
+            region: "us-east-1",
+            accessKeyId: "k",
+            secretAccessKey: "s",
+          }),
+        /S3_BUCKET/,
+      );
+
+      assert.throws(
+        () =>
+          createObjectStoreClient({
+            bucket: "novapay-registry-packages",
+            region: "us-east-1",
+            accessKeyId: "",
+            secretAccessKey: "",
+          }),
+        /S3_ACCESS_KEY_ID/,
+      );
     } finally {
       if (previous !== undefined) {
         process.env.OBJECT_STORE_DRIVER = previous;

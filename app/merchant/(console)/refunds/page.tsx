@@ -6,13 +6,11 @@ import {
   parsePageParam,
   getRefundStatusLabel,
   getRefundStatusTone,
-  readPageMessages,
   readSearchFilters,
   type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
-  FlashMessage,
   LabeledField,
   PaginationNav,
   StatCard,
@@ -44,9 +42,11 @@ export default async function MerchantRefundsPage({
   const session = await requireMerchantPermission("refund:read");
   const prisma = getPrismaClient();
   const locale = await getCurrentLocale();
-  const [filters, messages] = await Promise.all([
-    readSearchFilters(searchParams, ["status", "q", "orderReference", "page"]),
-    readPageMessages(searchParams),
+  const filters = await readSearchFilters(searchParams, [
+    "status",
+    "q",
+    "orderReference",
+    "page",
   ]);
   const requestedPage = parsePageParam(filters.page);
   const canManageRefunds = hasMerchantPermission(session.merchantUser.role, "refund:write");
@@ -252,8 +252,6 @@ export default async function MerchantRefundsPage({
           </a>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label={content.statRefunds} value={totalCount} detail={content.statRefundsDetail} />

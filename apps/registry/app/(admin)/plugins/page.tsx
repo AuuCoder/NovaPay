@@ -82,18 +82,20 @@ export default async function AdminPluginsPage() {
           open: "打开",
         };
 
-  const rows = state.catalog.map((plugin) => {
-    const versions = listPluginVersionRecords(state, plugin.slug);
-    const currentVersionRecord =
-      versions.find((item) => item.version === plugin.version) ?? versions[0] ?? null;
+  const rows = await Promise.all(
+    state.catalog.map(async (plugin) => {
+      const versions = listPluginVersionRecords(state, plugin.slug);
+      const currentVersionRecord =
+        versions.find((item) => item.version === plugin.version) ?? versions[0] ?? null;
 
-    return {
-      plugin,
-      owner: getPluginOwner(plugin.slug),
-      versionCount: versions.length,
-      currentVersionRecord,
-    };
-  });
+      return {
+        plugin,
+        owner: await getPluginOwner(plugin.slug),
+        versionCount: versions.length,
+        currentVersionRecord,
+      };
+    }),
+  );
 
   return (
     <section className="admin-shell">

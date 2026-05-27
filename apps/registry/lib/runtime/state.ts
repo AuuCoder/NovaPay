@@ -18,7 +18,6 @@
 import { sign as cryptoSignRaw, type KeyObject } from "node:crypto";
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -38,21 +37,23 @@ import {
 } from "../signing/local-material-store";
 import { createSigner, type Ed25519Signer } from "../signing/signer";
 import {
-  createPersistentRevocationStore,
+  createInMemoryRevocationStore,
+  createPrismaRevocationStore,
   type RevocationStore,
 } from "../licensing/revocation";
 import {
-  createPersistentLicenseStore,
+  createInMemoryLicenseStore,
+  createPrismaLicenseStore,
   type LicenseStore,
 } from "../licensing/store";
 import {
   createInMemoryOrderStore,
-  createPersistentOrderStore,
+  createPrismaOrderStore,
   type OrderStore,
 } from "../payments/order-service";
 import {
   createInMemoryBalanceLedger,
-  createPersistentBalanceLedger,
+  createPrismaBalanceLedger,
   type BalanceLedger,
 } from "../payouts/balance-ledger";
 import {
@@ -279,90 +280,19 @@ let state: RegistryRuntimeState | null = null;
 let initPromise: Promise<RegistryRuntimeState> | null = null;
 
 /**
- * When `REGISTRY_STORE_DRIVER=prisma`, the runtime uses Prisma-backed stores
- * connected to the Registry Postgres database. Otherwise falls back to the
- * in-memory stores (suitable for dev/test).
+ * Registry runtime no longer reads/writes any `.tmp/*.json` files. Plugin
+ * versions, verification sessions, ledger entries, license records, etc. all
+ * live in Postgres via Prisma. The helpers below remain as no-ops so existing
+ * call sites compile until they migrate to Prisma-backed persistence.
  */
-function shouldUsePrisma(): boolean {
-  return process.env.REGISTRY_STORE_DRIVER === "prisma";
+function loadRuntimePersistence(): RuntimePersistenceSnapshot {
+  return { pluginVersions: [], verificationSessions: [] };
 }
 
-function getRuntimePersistenceFile(rootDir: string) {
-  return path.join(rootDir, ".tmp", "registry-runtime-state.json");
-}
-
-function getLedgerPersistenceFile(rootDir: string) {
-  return path.join(rootDir, ".tmp", "registry-ledger-state.json");
-}
-
-function getOrderPersistenceFile(rootDir: string) {
-  return path.join(rootDir, ".tmp", "registry-orders-state.json");
-}
-
-function getLicensePersistenceFile(rootDir: string) {
-  return path.join(rootDir, ".tmp", "registry-licenses-state.json");
-}
-
-function getRevocationPersistenceFile(rootDir: string) {
-  return path.join(rootDir, ".tmp", "registry-revocations-state.json");
-}
-
-function loadRuntimePersistence(rootDir: string): RuntimePersistenceSnapshot {
-  const filePath = getRuntimePersistenceFile(rootDir);
-
-  if (!existsSync(filePath)) {
-    return { pluginVersions: [], verificationSessions: [] };
-  }
-
-  try {
-    return JSON.parse(readFileSync(filePath, "utf8")) as RuntimePersistenceSnapshot;
-  } catch {
-    return { pluginVersions: [], verificationSessions: [] };
-  }
-}
-
-function saveRuntimePersistence(state: RegistryRuntimeState, rootDir: string) {
-  const filePath = getRuntimePersistenceFile(rootDir);
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  const existing = loadRuntimePersistence(rootDir);
-  const pluginVersions = new Map(
-    existing.pluginVersions.map((record) => [`${record.slug}@${record.version}`, record]),
-  );
-  const verificationSessions = new Map(
-    existing.verificationSessions.map((session) => [session.id, session]),
-  );
-
-  for (const record of state.pluginVersions.values()) {
-    pluginVersions.set(`${record.slug}@${record.version}`, {
-      ...record,
-      publishedAt: record.publishedAt?.toISOString() ?? null,
-      createdAt: record.createdAt.toISOString(),
-      updatedAt: record.updatedAt.toISOString(),
-    });
-  }
-
-  for (const session of state.verificationSessions.values()) {
-    verificationSessions.set(session.id, {
-      ...session,
-      startedAt: session.startedAt?.toISOString() ?? null,
-      completedAt: session.completedAt?.toISOString() ?? null,
-      expiresAt: session.expiresAt?.toISOString() ?? null,
-      createdAt: session.createdAt.toISOString(),
-      updatedAt: session.updatedAt.toISOString(),
-      steps: session.steps.map((step) => ({
-        ...step,
-        startedAt: step.startedAt?.toISOString() ?? null,
-        completedAt: step.completedAt?.toISOString() ?? null,
-      })),
-    });
-  }
-
-  const snapshot: RuntimePersistenceSnapshot = {
-    pluginVersions: [...pluginVersions.values()],
-    verificationSessions: [...verificationSessions.values()],
-  };
-
-  writeFileSync(filePath, JSON.stringify(snapshot, null, 2), "utf8");
+function saveRuntimePersistence(_state: RegistryRuntimeState) {
+  // Plugin versions and verification sessions persist via Prisma in the
+  // Registry database. The in-process Maps are reseeded from Prisma on
+  // every cold start by `seedFromPrisma()` inside `initState()`.
 }
 
 function isRegistryPaidPricingPlanKind(
@@ -613,57 +543,52 @@ async function loadPersistedRemoteBundles(input: {
 }
 
 async function initState(): Promise<RegistryRuntimeState> {
-  const usePrisma = shouldUsePrisma();
-
-  // When Prisma driver is selected, swap stores below for Prisma-backed
-  // implementations. The signing key + demo bundles still seed in-process
-  // for now (catalog + demo bundles will move to PluginRecord/PluginVersion
-  // tables in a follow-up). The data-only stores (revocations, orders,
-  // ledger, audit, consumers) switch over fully.
+  // Registry runtime now requires Postgres for persistence. The in-memory
+  // stores are only used as graceful fallback when the Prisma client cannot
+  // be loaded (e.g. unit tests) — production must always have a database.
   let prismaStores: ReturnType<typeof import("./prisma-stores").createPrismaStores> | null = null;
-  if (usePrisma) {
-    try {
-      const { getPrismaClient } = await import("./prisma-client");
-      const { createPrismaStores } = await import("./prisma-stores");
-      const prisma = await getPrismaClient();
-      if (prisma) {
-        const prismaLike = prisma as {
-          developer?: {
-            upsert(args: unknown): Promise<unknown>;
-          };
+  let prismaForStores: unknown = null;
+  try {
+    const { getPrismaClient } = await import("./prisma-client");
+    const { createPrismaStores } = await import("./prisma-stores");
+    const prisma = await getPrismaClient();
+    if (prisma) {
+      prismaForStores = prisma;
+      const prismaLike = prisma as {
+        developer?: {
+          upsert(args: unknown): Promise<unknown>;
         };
-        if (prismaLike.developer) {
-          await prismaLike.developer.upsert({
-            where: { id: OFFICIAL_DEVELOPER_ID },
-            update: {
-              email: OFFICIAL_DEVELOPER_EMAIL,
-              displayName: "NovaPay Official",
-              contact: { source: "system" },
-              status: "ACTIVE",
-              passwordHash: "official-system-account",
-            },
-            create: {
-              id: OFFICIAL_DEVELOPER_ID,
-              email: OFFICIAL_DEVELOPER_EMAIL,
-              displayName: "NovaPay Official",
-              contact: { source: "system" },
-              status: "ACTIVE",
-              passwordHash: "official-system-account",
-            },
-          });
-        }
-        prismaStores = createPrismaStores(prisma as Parameters<typeof createPrismaStores>[0]);
-      } else {
-        console.warn(
-          "[registry] REGISTRY_STORE_DRIVER=prisma but Prisma client could not be loaded — falling back to in-memory stores. Run `prisma generate` first.",
-        );
+      };
+      if (prismaLike.developer) {
+        await prismaLike.developer.upsert({
+          where: { id: OFFICIAL_DEVELOPER_ID },
+          update: {
+            email: OFFICIAL_DEVELOPER_EMAIL,
+            displayName: "NovaPay Official",
+            contact: { source: "system" },
+            status: "ACTIVE",
+          },
+          create: {
+            id: OFFICIAL_DEVELOPER_ID,
+            email: OFFICIAL_DEVELOPER_EMAIL,
+            displayName: "NovaPay Official",
+            contact: { source: "system" },
+            status: "ACTIVE",
+            passwordHash: "official-system-account",
+          },
+        });
       }
-    } catch (err) {
+      prismaStores = createPrismaStores(prisma as Parameters<typeof createPrismaStores>[0]);
+    } else {
       console.warn(
-        "[registry] Failed to initialise Prisma stores — falling back to in-memory:",
-        err instanceof Error ? err.message : err,
+        "[registry] Prisma client could not be loaded — falling back to in-memory stores. Set REGISTRY_DATABASE_URL or DATABASE_URL and run `prisma migrate deploy`.",
       );
     }
+  } catch (err) {
+    console.warn(
+      "[registry] Failed to initialise Prisma stores — falling back to in-memory:",
+      err instanceof Error ? err.message : err,
+    );
   }
 
   const keyStore = prismaStores?.signingKeyStore ?? createInMemorySigningKeyStore();
@@ -673,7 +598,7 @@ async function initState(): Promise<RegistryRuntimeState> {
 
   try {
     const activeKey = await keyStore.getActive();
-    const material = loadLocalSigningMaterialByKeyId(activeKey.keyId);
+    const material = await loadLocalSigningMaterialByKeyId(activeKey.keyId);
     if (material?.privateKey) {
       currentKeyPair = {
         keyId: material.keyId,
@@ -694,7 +619,7 @@ async function initState(): Promise<RegistryRuntimeState> {
       keyStore,
       adapter,
     );
-    persistLocalSigningKeyPair(rotation.keyPair);
+    await persistLocalSigningKeyPair(rotation.keyPair);
     currentKeyPair = rotation.keyPair;
   }
 
@@ -713,29 +638,42 @@ async function initState(): Promise<RegistryRuntimeState> {
   });
 
   const objectStore = createObjectStoreClient({
-    bucket: "novapay-registry-packages",
-    region: "local",
-    accessKeyId: "local",
-    secretAccessKey: "local",
+    bucket: process.env.S3_BUCKET ?? "novapay-registry-packages",
+    region: process.env.S3_REGION ?? "us-east-1",
+    accessKeyId: process.env.S3_ACCESS_KEY_ID ?? "",
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "",
+    endpoint: process.env.S3_ENDPOINT_URL,
+    forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
     publicBaseUrl: process.env.REGISTRY_OBJECT_PUBLIC_BASE_URL,
   });
-  const revocations = createPersistentRevocationStore(
-    getRevocationPersistenceFile(REGISTRY_PROJECT_ROOT),
-  );
-  const licenseStore = createPersistentLicenseStore(
-    getLicensePersistenceFile(REGISTRY_PROJECT_ROOT),
-  );
-  const orderStore = createPersistentOrderStore(
-    getOrderPersistenceFile(REGISTRY_PROJECT_ROOT),
-  );
-  const ledger = createPersistentBalanceLedger(
-    getLedgerPersistenceFile(REGISTRY_PROJECT_ROOT),
-    {
-      holdDaysResolver: async () => (await getSettlementSettings()).payoutHoldDays,
-    },
-  );
+
+  const revocations: RevocationStore = prismaForStores
+    ? createPrismaRevocationStore(
+        prismaForStores as Parameters<typeof createPrismaRevocationStore>[0],
+      )
+    : createInMemoryRevocationStore();
+  const licenseStore: LicenseStore = prismaForStores
+    ? createPrismaLicenseStore(
+        prismaForStores as Parameters<typeof createPrismaLicenseStore>[0],
+      )
+    : createInMemoryLicenseStore();
+  const orderStore: OrderStore = prismaForStores
+    ? createPrismaOrderStore(
+        prismaForStores as Parameters<typeof createPrismaOrderStore>[0],
+      )
+    : createInMemoryOrderStore();
+  const ledger: BalanceLedger = prismaForStores
+    ? createPrismaBalanceLedger(
+        prismaForStores as Parameters<typeof createPrismaBalanceLedger>[0],
+        {
+          holdDaysResolver: async () => (await getSettlementSettings()).payoutHoldDays,
+        },
+      )
+    : createInMemoryBalanceLedger({
+        holdDaysResolver: async () => (await getSettlementSettings()).payoutHoldDays,
+      });
   const auditLogger = createInMemoryAuditLogger();
-  const runtimePersistence = loadRuntimePersistence(REGISTRY_PROJECT_ROOT);
+  const runtimePersistence = loadRuntimePersistence();
 
   const seeds: Array<Parameters<typeof buildDemoBundle>[0]> = [];
 
@@ -807,15 +745,20 @@ async function initState(): Promise<RegistryRuntimeState> {
       if (!keyPair.privateKey) {
         throw new Error("Active signing key pair must include a private key.");
       }
-      persistLocalSigningKeyPair(keyPair);
+      // Fire-and-forget; the in-memory `currentSigningPrivateKey` switch is
+      // what callers need synchronously. The DB write only matters for cold
+      // restarts, where it's safe to lag a few hundred ms behind.
+      void persistLocalSigningKeyPair(keyPair).catch((err) => {
+        console.error("[registry] Failed to persist rotated signing key:", err);
+      });
       currentSigningPrivateKey = keyPair.privateKey;
       draftState.signingPrivateKey = keyPair.privateKey;
       draftState.signingKeyPair = keyPair;
     },
-    revocations: prismaStores?.revocationStore ?? revocations,
-    licenseStore: prismaStores?.licenseStore ?? licenseStore,
-    orderStore: prismaStores?.orderStore ?? orderStore,
-    ledger: prismaStores?.ledger ?? ledger,
+    revocations,
+    licenseStore,
+    orderStore,
+    ledger,
     auditLogger: prismaStores?.auditLogger ?? auditLogger,
     objectStore,
     demoBundles,
@@ -1035,7 +978,7 @@ export function registerUploadedCatalogBundle(
     }
   }
 
-  saveRuntimePersistence(state, REGISTRY_PROJECT_ROOT);
+  saveRuntimePersistence(state);
 }
 
 export function createPluginVersionTestSession(input: {
@@ -1077,7 +1020,7 @@ export function createPluginVersionTestSession(input: {
     sessionId: session.id,
   }));
   input.state.verificationSessions.set(session.id, session);
-  saveRuntimePersistence(input.state, REGISTRY_PROJECT_ROOT);
+  saveRuntimePersistence(input.state);
   return session;
 }
 
@@ -1089,7 +1032,7 @@ export function updatePluginVersionTestSession(
     ...session,
     updatedAt: new Date(),
   });
-  saveRuntimePersistence(state, REGISTRY_PROJECT_ROOT);
+  saveRuntimePersistence(state);
 }
 
 export function listPluginVersionTestSessions(input: {
@@ -1209,7 +1152,7 @@ export function updatePluginVersionReviewState(input: {
     }
   }
 
-  saveRuntimePersistence(input.state, REGISTRY_PROJECT_ROOT);
+  saveRuntimePersistence(input.state);
   return nextRecord;
 }
 
@@ -1233,7 +1176,7 @@ export function updatePluginVersionScanResult(input: {
   };
 
   input.state.pluginVersions.set(key, nextRecord);
-  saveRuntimePersistence(input.state, REGISTRY_PROJECT_ROOT);
+  saveRuntimePersistence(input.state);
   return nextRecord;
 }
 

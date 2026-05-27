@@ -4,13 +4,11 @@ import {
   formatDateTime,
   getPaginationState,
   parsePageParam,
-  readPageMessages,
   readSearchFilters,
   type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
-  FlashMessage,
   LabeledField,
   PaginationNav,
   StatusBadge,
@@ -34,10 +32,7 @@ export default async function AdminUsersPage({
   await requireAdminPermission("admin_user:read");
   const prisma = getPrismaClient();
   const locale = await getCurrentLocale();
-  const [messages, filters] = await Promise.all([
-    readPageMessages(searchParams),
-    readSearchFilters(searchParams, ["q", "page"]),
-  ]);
+  const filters = await readSearchFilters(searchParams, ["q", "page"]);
   const requestedPage = parsePageParam(filters.page);
   const keyword = filters.q;
   const roleOptions =
@@ -157,8 +152,6 @@ export default async function AdminUsersPage({
         title={content.title}
         description={content.description}
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className={`${panelClass} p-6`}>
         <h2 className="text-2xl font-semibold text-foreground">{content.createTitle}</h2>

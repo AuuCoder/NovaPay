@@ -1,5 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+/**
+ * License store: tracks issued licenses for purchase records and revocation
+ * lookup. The persistent implementation runs against the Registry Postgres
+ * database via Prisma; the in-memory implementation is kept for unit tests.
+ */
 
 export interface LicenseRecord {
   id: string;
@@ -24,28 +27,6 @@ export interface LicenseStore {
   findByOrderId(orderId: string): Promise<LicenseRecord | null>;
   markRevoked(id: string): Promise<LicenseRecord | null>;
   listAll(): Promise<LicenseRecord[]>;
-}
-
-interface PersistedLicenseRecord
-  extends Omit<LicenseRecord, "issuedAt" | "expiresAt"> {
-  issuedAt: string;
-  expiresAt: string | null;
-}
-
-function toPersisted(record: LicenseRecord): PersistedLicenseRecord {
-  return {
-    ...record,
-    issuedAt: record.issuedAt.toISOString(),
-    expiresAt: record.expiresAt?.toISOString() ?? null,
-  };
-}
-
-function fromPersisted(record: PersistedLicenseRecord): LicenseRecord {
-  return {
-    ...record,
-    issuedAt: new Date(record.issuedAt),
-    expiresAt: record.expiresAt ? new Date(record.expiresAt) : null,
-  };
 }
 
 export function createInMemoryLicenseStore(): LicenseStore {
@@ -85,67 +66,110 @@ export function createInMemoryLicenseStore(): LicenseStore {
   };
 }
 
-export function createPersistentLicenseStore(filePath: string): LicenseStore {
-  function load() {
-    if (!existsSync(filePath)) {
-      return [] as PersistedLicenseRecord[];
-    }
+interface PrismaLicenseLike {
+  license: {
+    upsert(args: unknown): Promise<unknown>;
+    findUnique(args: unknown): Promise<unknown>;
+    findFirst(args: unknown): Promise<unknown>;
+    findMany(args: unknown): Promise<unknown[]>;
+    update(args: unknown): Promise<unknown>;
+  };
+}
 
-    try {
-      return JSON.parse(readFileSync(filePath, "utf8")) as PersistedLicenseRecord[];
-    } catch {
-      return [] as PersistedLicenseRecord[];
-    }
-  }
+interface LicenseRow {
+  id: string;
+  orderId: string | null;
+  pluginId: string;
+  pluginSlug: string;
+  developerId: string | null;
+  version: string;
+  pricingPlanKind: LicenseRecord["pricingPlanKind"];
+  issuedAt: Date;
+  expiresAt: Date | null;
+  state: LicenseRecord["state"];
+  jwsCompact: string;
+  licenseKeyHash: string;
+  instanceId: string | null;
+  merchantId: string | null;
+}
 
-  function save(records: LicenseRecord[]) {
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, JSON.stringify(records.map(toPersisted), null, 2), "utf8");
-  }
+function fromRow(row: LicenseRow): LicenseRecord {
+  return {
+    id: row.id,
+    orderId: row.orderId,
+    pluginId: row.pluginId,
+    pluginSlug: row.pluginSlug,
+    developerId: row.developerId,
+    version: row.version,
+    pricingPlanKind: row.pricingPlanKind,
+    issuedAt: row.issuedAt,
+    expiresAt: row.expiresAt,
+    state: row.state,
+    jwsCompact: row.jwsCompact,
+    licenseKeyHash: row.licenseKeyHash,
+    instanceId: row.instanceId,
+    merchantId: row.merchantId,
+  };
+}
 
-  const records = load().map(fromPersisted);
-  const byId = new Map(records.map((record) => [record.id, record]));
-  const byOrderId = new Map(
-    records
-      .filter((record) => record.orderId)
-      .map((record) => [record.orderId as string, record.id]),
-  );
+function toData(record: LicenseRecord) {
+  return {
+    id: record.id,
+    orderId: record.orderId,
+    pluginId: record.pluginId,
+    pluginSlug: record.pluginSlug,
+    developerId: record.developerId,
+    version: record.version,
+    pricingPlanKind: record.pricingPlanKind,
+    issuedAt: record.issuedAt,
+    expiresAt: record.expiresAt,
+    state: record.state,
+    jwsCompact: record.jwsCompact,
+    licenseKeyHash: record.licenseKeyHash,
+    instanceId: record.instanceId,
+    merchantId: record.merchantId,
+  };
+}
 
-  function ordered() {
-    return [...byId.values()].sort(
-      (left, right) => right.issuedAt.getTime() - left.issuedAt.getTime(),
-    );
-  }
-
+export function createPrismaLicenseStore(prisma: PrismaLicenseLike): LicenseStore {
   return {
     async save(record) {
-      byId.set(record.id, { ...record });
-      if (record.orderId) {
-        byOrderId.set(record.orderId, record.id);
-      }
-      save(ordered());
-      return { ...record };
+      const data = toData(record);
+      const upserted = (await prisma.license.upsert({
+        where: { id: record.id },
+        create: data,
+        update: {
+          state: data.state,
+          jwsCompact: data.jwsCompact,
+          expiresAt: data.expiresAt,
+        },
+      })) as LicenseRow;
+      return fromRow(upserted);
     },
     async findById(id) {
-      const record = byId.get(id);
-      return record ? { ...record } : null;
+      const row = (await prisma.license.findUnique({ where: { id } })) as LicenseRow | null;
+      return row ? fromRow(row) : null;
     },
     async findByOrderId(orderId) {
-      const id = byOrderId.get(orderId);
-      if (!id) return null;
-      const record = byId.get(id);
-      return record ? { ...record } : null;
+      const row = (await prisma.license.findFirst({ where: { orderId } })) as LicenseRow | null;
+      return row ? fromRow(row) : null;
     },
     async markRevoked(id) {
-      const record = byId.get(id);
-      if (!record) return null;
-      const updated: LicenseRecord = { ...record, state: "REVOKED" };
-      byId.set(id, updated);
-      save(ordered());
-      return { ...updated };
+      try {
+        const row = (await prisma.license.update({
+          where: { id },
+          data: { state: "REVOKED" },
+        })) as LicenseRow;
+        return fromRow(row);
+      } catch {
+        return null;
+      }
     },
     async listAll() {
-      return ordered().map((record) => ({ ...record }));
+      const rows = (await prisma.license.findMany({
+        orderBy: { issuedAt: "desc" },
+      })) as LicenseRow[];
+      return rows.map(fromRow);
     },
   };
 }

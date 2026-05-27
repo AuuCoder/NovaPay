@@ -4,13 +4,11 @@ import {
   formatMoney,
   getSettlementStatusLabel,
   getSettlementStatusTone,
-  readPageMessages,
   readSearchFilters,
   type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
-  FlashMessage,
   LabeledField,
   StatCard,
   StatusBadge,
@@ -57,6 +55,7 @@ function formatDay(value: Date, locale: Locale = "zh") {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    timeZone: "Asia/Shanghai",
   }).format(value);
 }
 
@@ -97,7 +96,6 @@ export default async function AdminFinancePage({
   const prisma = getPrismaClient();
   const locale = await getCurrentLocale();
   const filters = await readSearchFilters(searchParams, ["merchantCode", "dateFrom", "dateTo"]);
-  const messages = await readPageMessages(searchParams);
   const content =
     locale === "en"
       ? {
@@ -462,8 +460,6 @@ export default async function AdminFinancePage({
           )
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard label={content.income} value={formatMoney(totalIncome, "CNY", locale)} detail={content.incomeDetail} />

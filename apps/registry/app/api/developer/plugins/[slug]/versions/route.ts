@@ -142,7 +142,7 @@ export async function POST(
   }
 
   try {
-    ensurePluginOwnership(slug, auth.actor.session.actorId);
+    await ensurePluginOwnership(slug, auth.actor.session.actorId);
 
     // Run the bundle pipeline (extract → sha256 → store → sign)
     const pipelineResult = await runBundlePipeline(

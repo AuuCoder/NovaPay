@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
 import { AdminLoginForm } from "@/app/admin/admin-login-form";
 import { loginAdminAction } from "@/app/admin/actions";
-import { readPageMessages, type SearchParamsInput } from "@/app/admin/support";
 import { FlashMessage } from "@/app/admin/ui";
+import { FlashToast } from "@/app/admin/flash-toast";
 import { hasAdminSession, isAdminUiConfigured } from "@/lib/admin-session";
 import { getCurrentLocale } from "@/lib/i18n-server";
 import { getMainSiteSetupStatus } from "@/lib/platform-setup";
@@ -30,11 +30,7 @@ function getAdminLoginPrefill() {
   };
 }
 
-export default async function AdminLoginPage({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
+export default async function AdminLoginPage() {
   const setupStatus = await getMainSiteSetupStatus();
 
   if (!setupStatus.setupComplete) {
@@ -45,7 +41,6 @@ export default async function AdminLoginPage({
     redirect("/admin");
   }
 
-  const messages = await readPageMessages(searchParams);
   const configured = await isAdminUiConfigured();
   const locale = await getCurrentLocale();
   const loginPrefill = getAdminLoginPrefill();
@@ -91,6 +86,7 @@ export default async function AdminLoginPage({
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center px-6 py-10 sm:px-10">
+      <FlashToast locale={locale} />
       <section className="grid w-full gap-8 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="rounded-[2rem] border border-line bg-[#1f1812] p-8 text-[#f8efe6] shadow-[0_22px_80px_rgba(20,15,10,0.32)] sm:p-10">
           <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#d8c3ae]">
@@ -120,8 +116,8 @@ export default async function AdminLoginPage({
 
           <div className="mt-6">
             <FlashMessage
-              success={!configured ? null : messages.success}
-              error={!configured ? content.notReady : messages.error}
+              success={null}
+              error={!configured ? content.notReady : null}
             />
           </div>
 

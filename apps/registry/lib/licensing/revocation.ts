@@ -1,12 +1,10 @@
 /**
  * License revocation store and verifier cache invalidation (Req 13.8, 18.2).
  *
- * The Registry now supports both file-backed persistence for local/dev flows
- * and Prisma-backed persistence via `createPrismaRevocationStore`.
+ * Production uses the Prisma-backed implementation. The in-memory variant is
+ * kept for unit tests.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
 import type { RevocationLookup } from "./verifier";
 
 export interface RevocationRecord {
@@ -22,24 +20,6 @@ export interface RevocationStore extends RevocationLookup {
   add(record: RevocationRecord): Promise<void>;
   list(): Promise<RevocationRecord[]>;
   invalidateCache(): void;
-}
-
-interface PersistedRevocationRecord extends Omit<RevocationRecord, "revokedAt"> {
-  revokedAt: string;
-}
-
-function toPersisted(record: RevocationRecord): PersistedRevocationRecord {
-  return {
-    ...record,
-    revokedAt: record.revokedAt.toISOString(),
-  };
-}
-
-function fromPersisted(record: PersistedRevocationRecord): RevocationRecord {
-  return {
-    ...record,
-    revokedAt: new Date(record.revokedAt),
-  };
 }
 
 export function createInMemoryRevocationStore(): RevocationStore {
@@ -63,46 +43,118 @@ export function createInMemoryRevocationStore(): RevocationStore {
   };
 }
 
-export function createPersistentRevocationStore(filePath: string): RevocationStore {
-  function load() {
-    if (!existsSync(filePath)) {
-      return [] as PersistedRevocationRecord[];
+interface PrismaRevocationLike {
+  licenseRevocation: {
+    findFirst(args: unknown): Promise<unknown>;
+    findMany(args: unknown): Promise<unknown[]>;
+    upsert(args: unknown): Promise<unknown>;
+  };
+  license: {
+    findUnique(args: unknown): Promise<unknown>;
+    update(args: unknown): Promise<unknown>;
+  };
+}
+
+interface RevocationRow {
+  id: string;
+  licenseId: string;
+  reason: string;
+  revokedById: string;
+  revokedAt: Date;
+  note: string | null;
+}
+
+interface LicenseHashRow {
+  licenseKeyHash: string;
+  state: string;
+}
+
+const REVOCATION_CACHE_TTL_MS = 30_000;
+
+export function createPrismaRevocationStore(
+  prisma: PrismaRevocationLike,
+): RevocationStore {
+  // Cache the set of revoked license-key hashes; invalidate on add() and
+  // every TTL_MS for safety against multi-process drift.
+  let cachedAt = 0;
+  let cache: Set<string> | null = null;
+
+  async function getCache(): Promise<Set<string>> {
+    if (cache && Date.now() - cachedAt < REVOCATION_CACHE_TTL_MS) {
+      return cache;
     }
-
-    try {
-      return JSON.parse(readFileSync(filePath, "utf8")) as PersistedRevocationRecord[];
-    } catch {
-      return [] as PersistedRevocationRecord[];
-    }
-  }
-
-  function save(records: RevocationRecord[]) {
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, JSON.stringify(records.map(toPersisted), null, 2), "utf8");
-  }
-
-  const records = load().map(fromPersisted);
-  const byHash = new Map(records.map((record) => [record.licenseKeyHash, record]));
-
-  function ordered() {
-    return [...byHash.values()].sort(
-      (left, right) => right.revokedAt.getTime() - left.revokedAt.getTime(),
+    const rows = (await prisma.licenseRevocation.findMany({
+      select: {
+        license: { select: { licenseKeyHash: true, state: true } },
+      },
+    })) as Array<{ license: LicenseHashRow }>;
+    cache = new Set(
+      rows
+        .filter((row) => row.license)
+        .map((row) => row.license.licenseKeyHash),
     );
+    cachedAt = Date.now();
+    return cache;
   }
 
   return {
     async add(record) {
-      byHash.set(record.licenseKeyHash, { ...record });
-      save(ordered());
+      // Look up license by hash to associate the revocation.
+      const license = (await prisma.license.findUnique({
+        where: { licenseKeyHash: record.licenseKeyHash },
+        select: { id: true },
+      })) as { id: string } | null;
+
+      if (!license) {
+        throw new Error(`License not found for hash ${record.licenseKeyHash}`);
+      }
+
+      await prisma.licenseRevocation.upsert({
+        where: { licenseId: license.id },
+        create: {
+          licenseId: license.id,
+          reason: record.reason,
+          revokedById: record.revokedById,
+          revokedAt: record.revokedAt,
+          note: record.note ?? null,
+        },
+        update: {
+          reason: record.reason,
+          revokedById: record.revokedById,
+          revokedAt: record.revokedAt,
+          note: record.note ?? null,
+        },
+      });
+
+      await prisma.license.update({
+        where: { id: license.id },
+        data: { state: "REVOKED" },
+      });
+
+      cache = null;
     },
     async isRevoked(licenseKeyHash) {
-      return byHash.has(licenseKeyHash);
+      const set = await getCache();
+      return set.has(licenseKeyHash);
     },
     async list() {
-      return ordered().map((record) => ({ ...record }));
+      const rows = (await prisma.licenseRevocation.findMany({
+        orderBy: { revokedAt: "desc" },
+        include: {
+          license: { select: { licenseKeyHash: true } },
+        },
+      })) as Array<RevocationRow & { license: LicenseHashRow | null }>;
+      return rows.map((row) => ({
+        licenseId: row.licenseId,
+        licenseKeyHash: row.license?.licenseKeyHash ?? "",
+        reason: row.reason,
+        revokedById: row.revokedById,
+        revokedAt: row.revokedAt,
+        note: row.note,
+      }));
     },
     invalidateCache() {
-      // File-backed store has no additional cache layer.
+      cache = null;
     },
   };
 }

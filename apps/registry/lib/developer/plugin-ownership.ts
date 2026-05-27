@@ -1,28 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { isOfficialPluginSlug } from "../plugins/official";
-
-const REGISTRY_PROJECT_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-);
-const OWNERSHIP_STATE_FILE = path.join(
-  REGISTRY_PROJECT_ROOT,
-  ".tmp",
-  "registry-plugin-ownership.json",
-);
-
-interface PluginOwnershipRecord {
-  slug: string;
-  developerId: string;
-  createdAt: string;
-}
-
-interface PluginOwnershipSnapshot {
-  records: PluginOwnershipRecord[];
-}
+import { getPrismaClient } from "../runtime/prisma-client";
 
 export class PluginOwnershipError extends Error {
   code: "RESERVED_SLUG" | "NOT_OWNER";
@@ -34,41 +11,59 @@ export class PluginOwnershipError extends Error {
   }
 }
 
-function loadOwnershipState(): PluginOwnershipSnapshot {
-  if (!existsSync(OWNERSHIP_STATE_FILE)) {
-    return { records: [] };
-  }
-
-  try {
-    return JSON.parse(readFileSync(OWNERSHIP_STATE_FILE, "utf8")) as PluginOwnershipSnapshot;
-  } catch {
-    return { records: [] };
-  }
+interface OwnershipRow {
+  slug: string;
+  developerId: string;
+  createdAt: Date;
 }
 
-function saveOwnershipState(state: PluginOwnershipSnapshot) {
-  mkdirSync(path.dirname(OWNERSHIP_STATE_FILE), { recursive: true });
-  writeFileSync(OWNERSHIP_STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+interface PrismaOwnershipLike {
+  pluginOwnership: {
+    findUnique(args: unknown): Promise<unknown>;
+    findMany(args: unknown): Promise<unknown[]>;
+    create(args: unknown): Promise<unknown>;
+  };
 }
 
-export function getPluginOwner(slug: string) {
-  const state = loadOwnershipState();
-  return state.records.find((record) => record.slug === slug)?.developerId ?? null;
+async function getPrismaOwnership(): Promise<PrismaOwnershipLike | null> {
+  const prisma = (await getPrismaClient()) as unknown as PrismaOwnershipLike | null;
+  if (!prisma || !prisma.pluginOwnership) return null;
+  return prisma;
 }
 
-export function listPluginOwnerships() {
-  return loadOwnershipState().records.map((record) => ({ ...record }));
+export async function getPluginOwner(slug: string): Promise<string | null> {
+  const prisma = await getPrismaOwnership();
+  if (!prisma) return null;
+  const row = (await prisma.pluginOwnership.findUnique({ where: { slug } })) as
+    | OwnershipRow
+    | null;
+  return row?.developerId ?? null;
 }
 
-export function canDeveloperManagePlugin(slug: string, developerId: string | null) {
+export async function listPluginOwnerships() {
+  const prisma = await getPrismaOwnership();
+  if (!prisma) return [];
+  const rows = (await prisma.pluginOwnership.findMany({
+    orderBy: { createdAt: "asc" },
+  })) as OwnershipRow[];
+  return rows.map((row) => ({
+    slug: row.slug,
+    developerId: row.developerId,
+    createdAt: row.createdAt.toISOString(),
+  }));
+}
+
+export async function canDeveloperManagePlugin(
+  slug: string,
+  developerId: string | null,
+) {
   if (!developerId || isOfficialPluginSlug(slug)) {
     return false;
   }
-
-  return getPluginOwner(slug) === developerId;
+  return (await getPluginOwner(slug)) === developerId;
 }
 
-export function ensurePluginOwnership(slug: string, developerId: string) {
+export async function ensurePluginOwnership(slug: string, developerId: string) {
   if (isOfficialPluginSlug(slug)) {
     throw new PluginOwnershipError(
       "RESERVED_SLUG",
@@ -76,16 +71,19 @@ export function ensurePluginOwnership(slug: string, developerId: string) {
     );
   }
 
-  const state = loadOwnershipState();
-  const existing = state.records.find((record) => record.slug === slug);
+  const prisma = await getPrismaOwnership();
+  if (!prisma) {
+    throw new Error("Registry database is not available.");
+  }
+
+  const existing = (await prisma.pluginOwnership.findUnique({
+    where: { slug },
+  })) as OwnershipRow | null;
 
   if (!existing) {
-    state.records.push({
-      slug,
-      developerId,
-      createdAt: new Date().toISOString(),
+    await prisma.pluginOwnership.create({
+      data: { slug, developerId },
     });
-    saveOwnershipState(state);
     return { created: true, developerId };
   }
 
@@ -99,8 +97,8 @@ export function ensurePluginOwnership(slug: string, developerId: string) {
   return { created: false, developerId };
 }
 
-export function assertPluginOwnership(slug: string, developerId: string) {
-  if (!canDeveloperManagePlugin(slug, developerId)) {
+export async function assertPluginOwnership(slug: string, developerId: string) {
+  if (!(await canDeveloperManagePlugin(slug, developerId))) {
     throw new PluginOwnershipError(
       "NOT_OWNER",
       "You can browse this plugin, but only the original publisher can manage it.",

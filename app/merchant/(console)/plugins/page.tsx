@@ -1,12 +1,10 @@
 import Link from "next/link";
 import {
   buildPageHref,
-  readPageMessages,
   readSearchFilters,
   type SearchParamsInput,
 } from "@/app/admin/support";
 import {
-  FlashMessage,
   StatusBadge,
   buttonClass,
   subtleButtonClass,
@@ -33,10 +31,7 @@ export default async function MerchantPluginsPage({
 }) {
   const session = await requireMerchantPermission("channel:read");
   const locale = await getCurrentLocale();
-  const [messages, filters] = await Promise.all([
-    readPageMessages(searchParams),
-    readSearchFilters(searchParams, ["status", "q", "sort"]),
-  ]);
+  const filters = await readSearchFilters(searchParams, ["status", "q", "sort"]);
   const plugins = await listMerchantMarketplacePaymentPlugins(
     session.merchantUser.merchantId,
     locale,
@@ -247,8 +242,6 @@ export default async function MerchantPluginsPage({
   return (
     <div className="space-y-8">
       <MerchantRegistryPurchaseFinalizer locale={locale} />
-      <FlashMessage success={messages.success} error={messages.error} />
-
       <section className="rounded-[1.75rem] border border-line bg-[linear-gradient(135deg,rgba(255,255,255,0.96),rgba(248,243,236,0.88))] p-6 shadow-[var(--shadow)] sm:p-8">
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1.2fr)_360px] lg:items-center">
           <div>

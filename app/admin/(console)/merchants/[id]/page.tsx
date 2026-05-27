@@ -17,12 +17,9 @@ import {
   getMerchantStatusTone,
   getPaymentStatusLabel,
   getPaymentStatusTone,
-  readPageMessages,
-  type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
-  FlashMessage,
   LabeledField,
   StatCard,
   StatusBadge,
@@ -44,16 +41,13 @@ import { maskStoredSecret } from "@/lib/secret-box";
 
 export default async function MerchantDetailPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams?: SearchParamsInput;
 }) {
   const session = await requireAdminPermission("merchant:read");
   const { id } = await params;
   const prisma = getPrismaClient();
   const canReview = hasPermission(session.adminUser.role, "merchant:write");
-  const messages = await readPageMessages(searchParams);
   const locale = await getCurrentLocale();
   const merchant = await prisma.merchant.findUnique({
     where: { id },
@@ -448,8 +442,6 @@ export default async function MerchantDetailPage({
           </>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard label={content.statMerchantCode} value={merchant.code} detail={content.statMerchantCodeDetail} />

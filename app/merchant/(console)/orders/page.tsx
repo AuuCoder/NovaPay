@@ -8,12 +8,10 @@ import {
   getPaymentStatusLabel,
   getPaymentStatusTone,
   parsePageParam,
-  readPageMessages,
   readSearchFilters,
   type SearchParamsInput,
 } from "@/app/admin/support";
 import {
-  FlashMessage,
   AdminPageHeader,
   PaginationNav,
   StatCard,
@@ -43,9 +41,11 @@ export default async function MerchantOrdersPage({
   const session = await requireMerchantPermission("order:read");
   const prisma = getPrismaClient();
   const locale = await getCurrentLocale();
-  const [filters, messages] = await Promise.all([
-    readSearchFilters(searchParams, ["status", "channelCode", "q", "page"]),
-    readPageMessages(searchParams),
+  const filters = await readSearchFilters(searchParams, [
+    "status",
+    "channelCode",
+    "q",
+    "page",
   ]);
   const requestedPage = parsePageParam(filters.page);
   const paymentChannelOptions = await listMerchantInstalledPaymentChannelOptions(
@@ -231,8 +231,6 @@ export default async function MerchantOrdersPage({
         title={content.title}
         description={content.description}
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label={content.statOrders} value={totalCount} detail={content.statOrdersDetail} />

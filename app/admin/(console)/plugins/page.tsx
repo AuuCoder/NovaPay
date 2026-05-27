@@ -14,14 +14,12 @@ import {
   buildPageHref,
   getPaginationState,
   parsePageParam,
-  readPageMessages,
   readSearchFilters,
   type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
   EmptyState,
-  FlashMessage,
   PaginationNav,
   StatusBadge,
   buttonClass,
@@ -51,6 +49,7 @@ function formatDate(value: Date | null, locale: "zh" | "en") {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    timeZone: "Asia/Shanghai",
   }).format(value);
 }
 
@@ -162,9 +161,12 @@ export default async function PluginsPage({
 }) {
   const session = await requireAdminPermission("plugin_marketplace:read");
   const locale = await getCurrentLocale();
-  const [messages, filters] = await Promise.all([
-    readPageMessages(searchParams),
-    readSearchFilters(searchParams, ["status", "channelCode", "q", "sort", "page"]),
+  const filters = await readSearchFilters(searchParams, [
+    "status",
+    "channelCode",
+    "q",
+    "sort",
+    "page",
   ]);
   const plugins = await listMarketplacePaymentPlugins(locale);
   const schedulerStatus = getSchedulerStatus();
@@ -848,8 +850,6 @@ export default async function PluginsPage({
           </>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className={`${panelClass} p-4 sm:p-5`}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">

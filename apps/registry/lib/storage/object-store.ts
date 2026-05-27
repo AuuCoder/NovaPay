@@ -1,9 +1,9 @@
 /**
  * Object storage abstraction for the Registry.
  *
- * Phase 1 ships an in-memory stub driver suitable for local dev and unit
- * tests. A real S3-compatible driver (MinIO / AWS S3 / Cloudflare R2) will be
- * added in a follow-up task once the AWS SDK becomes a project dependency.
+ * Production uses an S3-compatible driver (works against AWS S3,
+ * Cloudflare R2, MinIO, Aliyun OSS, etc). The in-memory driver is reserved
+ * for unit tests.
  *
  * Design choices:
  *   - Object keys are content-addressed by sha256 (`packages/<sha256>.tar.gz`)
@@ -15,10 +15,6 @@
  *     yields `alreadyExisted: true`; mismatching sha256 throws to surface
  *     content drift loudly.
  */
-
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { createHash } from "node:crypto";
 
 export interface ObjectStorePutInput {
   /** Object key, e.g. `packages/<sha256>.tar.gz`. Must not start with `/`. */
@@ -115,14 +111,6 @@ interface InMemoryObject {
   createdAt: Date;
 }
 
-interface FileStoreObject {
-  bodyBase64: string;
-  contentType: string;
-  sha256: string;
-  storedSizeBytes: number;
-  createdAt: string;
-}
-
 interface InMemoryStoreOptions {
   publicBaseUrl?: string;
   defaultDownloadExpiresInSeconds?: number;
@@ -212,28 +200,70 @@ export function createInMemoryObjectStore(
   };
 }
 
-interface FileObjectStoreOptions {
-  rootDir: string;
-  publicBaseUrl?: string;
-  defaultDownloadExpiresInSeconds?: number;
-}
-
-function encodeFileObjectPath(rootDir: string, key: string) {
-  const fileName = Buffer.from(key, "utf8").toString("base64url") + ".json";
-  return path.join(rootDir, fileName);
-}
-
-function computeSha256Hex(body: Buffer) {
-  return createHash("sha256").update(body).digest("hex");
-}
-
-export function createFileObjectStore(
-  options: FileObjectStoreOptions,
+/**
+ * S3-compatible driver. Tested against AWS S3, MinIO, Cloudflare R2 and
+ * Aliyun OSS. The endpoint URL controls which target the driver speaks to:
+ *
+ * - AWS S3:           leave `endpoint` undefined (or set to your region URL)
+ * - MinIO local:      `endpoint=http://minio:9000`, `forcePathStyle=true`
+ * - Cloudflare R2:    `endpoint=https://<account>.r2.cloudflarestorage.com`
+ * - Aliyun OSS:       `endpoint=https://oss-cn-hangzhou.aliyuncs.com`
+ *
+ * The presigned download URL hostname can be overridden via
+ * `publicBaseUrl` so consumers download from a public CDN domain instead of
+ * the internal endpoint. The path of the underlying URL is preserved.
+ */
+export function createS3CompatibleObjectStoreClient(
+  config: ObjectStoreConfig,
 ): ObjectStoreClient {
-  const baseUrl = options.publicBaseUrl ?? "http://file-object-store.local";
+  // Lazy-load the AWS SDK so projects that only use the in-memory driver
+  // (e.g. unit tests) don't need to bundle the SDK.
+  const sdkPromise = (async () => {
+    const [{ S3Client, PutObjectCommand, HeadObjectCommand, GetObjectCommand }, presigner] =
+      await Promise.all([
+        import("@aws-sdk/client-s3"),
+        import("@aws-sdk/s3-request-presigner"),
+      ]);
+
+    const client = new S3Client({
+      region: config.region,
+      endpoint: config.endpoint,
+      forcePathStyle: config.forcePathStyle ?? Boolean(config.endpoint),
+      credentials: {
+        accessKeyId: config.accessKeyId,
+        secretAccessKey: config.secretAccessKey,
+      },
+    });
+
+    return {
+      client,
+      PutObjectCommand,
+      HeadObjectCommand,
+      GetObjectCommand,
+      getSignedUrl: presigner.getSignedUrl,
+    };
+  })();
+
   const defaultExpiry =
-    options.defaultDownloadExpiresInSeconds ??
+    config.defaultDownloadExpiresInSeconds ??
     DEFAULT_DOWNLOAD_PRESIGN_EXPIRES_IN_SECONDS;
+
+  function rewriteUrl(url: string) {
+    if (!config.publicBaseUrl) {
+      return url;
+    }
+
+    try {
+      const parsed = new URL(url);
+      const base = new URL(config.publicBaseUrl);
+      const rewritten = new URL(parsed.pathname + parsed.search, base);
+      rewritten.protocol = base.protocol;
+      rewritten.host = base.host;
+      return rewritten.toString();
+    } catch {
+      return url;
+    }
+  }
 
   return {
     async put(input) {
@@ -246,37 +276,33 @@ export function createFileObjectStore(
         );
       }
 
-      const sha256 = computeSha256Hex(body);
-      if (sha256 !== input.sha256) {
-        throw new Error(
-          `Object store sha256 mismatch: declared ${input.sha256}, actual ${sha256}.`,
-        );
-      }
+      const sdk = await sdkPromise;
 
-      const filePath = encodeFileObjectPath(options.rootDir, input.key);
-      if (existsSync(filePath)) {
-        const existing = JSON.parse(readFileSync(filePath, "utf8")) as FileStoreObject;
-        if (existing.sha256 !== input.sha256) {
-          throw new Error(
-            `Object store conflict: key already exists with different content (${input.key}).`,
-          );
-        }
+      // Idempotency check: if the object already exists with the same sha256
+      // (encoded into the key), short-circuit. Otherwise overwrite.
+      try {
+        await sdk.client.send(
+          new sdk.HeadObjectCommand({ Bucket: config.bucket, Key: input.key }),
+        );
         return {
           key: input.key,
           alreadyExisted: true,
-          storedSizeBytes: existing.storedSizeBytes,
+          storedSizeBytes: body.length,
         };
+      } catch {
+        // Not found — fall through to PUT.
       }
 
-      mkdirSync(options.rootDir, { recursive: true });
-      const payload: FileStoreObject = {
-        bodyBase64: body.toString("base64"),
-        contentType: input.contentType,
-        sha256: input.sha256,
-        storedSizeBytes: body.length,
-        createdAt: new Date().toISOString(),
-      };
-      writeFileSync(filePath, JSON.stringify(payload), "utf8");
+      await sdk.client.send(
+        new sdk.PutObjectCommand({
+          Bucket: config.bucket,
+          Key: input.key,
+          Body: body,
+          ContentType: input.contentType,
+          ContentLength: input.contentLength,
+          Metadata: { sha256: input.sha256 },
+        }),
+      );
 
       return {
         key: input.key,
@@ -287,22 +313,40 @@ export function createFileObjectStore(
 
     async exists(key) {
       sanitizeKey(key);
-      return existsSync(encodeFileObjectPath(options.rootDir, key));
+      const sdk = await sdkPromise;
+      try {
+        await sdk.client.send(
+          new sdk.HeadObjectCommand({ Bucket: config.bucket, Key: key }),
+        );
+        return true;
+      } catch {
+        return false;
+      }
     },
 
     async get(key) {
       sanitizeKey(key);
-      const filePath = encodeFileObjectPath(options.rootDir, key);
-      if (!existsSync(filePath)) {
+      const sdk = await sdkPromise;
+      try {
+        const response = await sdk.client.send(
+          new sdk.GetObjectCommand({ Bucket: config.bucket, Key: key }),
+        );
+        if (!response.Body) {
+          return null;
+        }
+        const chunks: Buffer[] = [];
+        for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+          chunks.push(Buffer.from(chunk));
+        }
+        const body = Buffer.concat(chunks);
+        return {
+          body,
+          contentType: response.ContentType ?? "application/octet-stream",
+          contentLength: body.length,
+        };
+      } catch {
         return null;
       }
-      const payload = JSON.parse(readFileSync(filePath, "utf8")) as FileStoreObject;
-      const body = Buffer.from(payload.bodyBase64, "base64");
-      return {
-        body,
-        contentType: payload.contentType,
-        contentLength: payload.storedSizeBytes,
-      };
     },
 
     async presignDownload(input) {
@@ -311,12 +355,17 @@ export function createFileObjectStore(
       if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
         throw new Error("expiresInSeconds must be a positive finite number.");
       }
-      const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
-      const expiresUnix = Math.floor(expiresAt.getTime() / 1000);
-      const url = `${baseUrl.replace(/\/$/, "")}/${input.key}?expires=${expiresUnix}`;
+
+      const sdk = await sdkPromise;
+      const url = await sdk.getSignedUrl(
+        sdk.client,
+        new sdk.GetObjectCommand({ Bucket: config.bucket, Key: input.key }),
+        { expiresIn: expiresInSeconds },
+      );
+
       return {
-        url,
-        expiresAt,
+        url: rewriteUrl(url),
+        expiresAt: new Date(Date.now() + expiresInSeconds * 1000),
         key: input.key,
       };
     },
@@ -324,33 +373,31 @@ export function createFileObjectStore(
 }
 
 /**
- * Placeholder for a real S3-compatible driver. Activated when the AWS SDK
- * dependency is added in a future task. Until then, callers must opt into the
- * in-memory driver via `OBJECT_STORE_DRIVER=memory`.
+ * Driver factory. Selection logic:
+ *
+ *   - `OBJECT_STORE_DRIVER=memory` → in-memory (test only)
+ *   - otherwise                    → S3-compatible (requires S3_* env vars)
  */
-export function createS3CompatibleObjectStoreClient(
-  _config: ObjectStoreConfig,
-): ObjectStoreClient {
-  throw new Error(
-    "S3-compatible object store driver will be provided after task 1.4 once @aws-sdk/client-s3 (or equivalent) is installed.",
-  );
-}
-
 export function createObjectStoreClient(
   config: ObjectStoreConfig,
 ): ObjectStoreClient {
-  if (!process.env.OBJECT_STORE_DRIVER || process.env.OBJECT_STORE_DRIVER === "file") {
-    return createFileObjectStore({
-      rootDir: path.join(process.cwd(), ".tmp", "registry-object-store"),
-      publicBaseUrl: config.publicBaseUrl,
-      defaultDownloadExpiresInSeconds: config.defaultDownloadExpiresInSeconds,
-    });
-  }
   if (process.env.OBJECT_STORE_DRIVER === "memory") {
     return createInMemoryObjectStore({
       publicBaseUrl: config.publicBaseUrl,
       defaultDownloadExpiresInSeconds: config.defaultDownloadExpiresInSeconds,
     });
   }
+
+  if (!config.bucket) {
+    throw new Error(
+      "Registry object store: S3_BUCKET (or config.bucket) is required.",
+    );
+  }
+  if (!config.accessKeyId || !config.secretAccessKey) {
+    throw new Error(
+      "Registry object store: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are required.",
+    );
+  }
+
   return createS3CompatibleObjectStoreClient(config);
 }

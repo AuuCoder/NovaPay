@@ -1,12 +1,10 @@
 import Link from "next/link";
 import {
   formatDateTime,
-  readPageMessages,
   type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
-  FlashMessage,
   LabeledField,
   StatusBadge,
   buttonClass,
@@ -47,7 +45,6 @@ export default async function MerchantChannelsPage({
   const session = await requireMerchantPermission("channel:read");
   const prisma = getPrismaClient();
   const resolvedSearchParams = (await searchParams) ?? {};
-  const messages = await readPageMessages(searchParams);
   const locale = await getCurrentLocale();
   const merchantChannelTemplates = await getActiveMerchantChannelTemplates(
     session.merchantUser.merchantId,
@@ -240,7 +237,6 @@ export default async function MerchantChannelsPage({
             </Link>
           }
         />
-        <FlashMessage success={messages.success} error={messages.error} />
         <section className={`${panelClass} border-dashed p-8 text-center`}>
           <p className="text-lg font-semibold text-foreground">{content.noInstalledTitle}</p>
           <p className="mt-2 text-sm leading-7 text-muted">{content.noInstalledDesc}</p>
@@ -276,8 +272,6 @@ export default async function MerchantChannelsPage({
           </Link>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       {hasRegulatedTemplates && hasProfileGaps ? (
         <section className="rounded-[1.5rem] border border-[#f3d1ab] bg-[#fff4e7] p-5 text-sm text-[#8a4d18]">

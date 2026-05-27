@@ -115,7 +115,7 @@ export function SettlementSettingsForm(props: {
 
         <div className="risk-kpi">
           <p className="risk-kpi-label">{props.locale === "en" ? "Last updated" : "最后更新时间"}</p>
-          <p className="risk-kpi-value">{new Date(props.initialSettings.updatedAt).toLocaleString(props.locale === "en" ? "en-US" : "zh-CN")}</p>
+          <p className="risk-kpi-value">{new Date(props.initialSettings.updatedAt).toLocaleString(props.locale === "en" ? "en-US" : "zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>
         </div>
 
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>

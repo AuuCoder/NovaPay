@@ -1,21 +1,16 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { readPageMessages, type SearchParamsInput } from "@/app/admin/support";
-import { FlashMessage, inputClass } from "@/app/admin/ui";
+import { FlashToast } from "@/app/admin/flash-toast";
+import { inputClass } from "@/app/admin/ui";
 import { registerMerchantAction } from "@/app/merchant/actions";
 import { getCurrentLocale } from "@/lib/i18n-server";
 import { hasMerchantSession } from "@/lib/merchant-session";
 
-export default async function MerchantRegisterPage({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
+export default async function MerchantRegisterPage() {
   if (await hasMerchantSession()) {
     redirect("/merchant");
   }
 
-  const messages = await readPageMessages(searchParams);
   const locale = await getCurrentLocale();
 
   const content =
@@ -90,6 +85,7 @@ export default async function MerchantRegisterPage({
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center px-6 py-10 sm:px-10">
+      <FlashToast locale={locale} />
       <section className="grid w-full gap-8 lg:grid-cols-[1fr_1fr]">
         <div className="rounded-[2rem] border border-line bg-panel-strong p-8 shadow-[var(--shadow)] sm:p-10">
           <p className="text-xs font-semibold uppercase tracking-[0.26em] text-secondary">
@@ -99,10 +95,6 @@ export default async function MerchantRegisterPage({
             {content.title}
           </h1>
           <p className="mt-3 text-sm leading-7 text-muted">{content.intro}</p>
-
-          <div className="mt-6">
-            <FlashMessage success={messages.success} error={messages.error} />
-          </div>
 
           <form action={registerMerchantAction} className="mt-6 grid gap-4">
             <label className="block space-y-2">

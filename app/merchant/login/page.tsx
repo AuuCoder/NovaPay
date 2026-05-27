@@ -1,21 +1,16 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { readPageMessages, type SearchParamsInput } from "@/app/admin/support";
-import { FlashMessage, inputClass } from "@/app/admin/ui";
+import { FlashToast } from "@/app/admin/flash-toast";
+import { inputClass } from "@/app/admin/ui";
 import { loginMerchantAction } from "@/app/merchant/actions";
 import { getCurrentLocale } from "@/lib/i18n-server";
 import { hasMerchantSession } from "@/lib/merchant-session";
 
-export default async function MerchantLoginPage({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
+export default async function MerchantLoginPage() {
   if (await hasMerchantSession()) {
     redirect("/merchant");
   }
 
-  const messages = await readPageMessages(searchParams);
   const locale = await getCurrentLocale();
 
   const content =
@@ -64,6 +59,7 @@ export default async function MerchantLoginPage({
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center px-6 py-10 sm:px-10">
+      <FlashToast locale={locale} />
       <section className="grid w-full gap-8 lg:grid-cols-[1.05fr_0.95fr]">
         <div className="rounded-[2rem] border border-line bg-[#1f1812] p-8 text-[#f8efe6] shadow-[0_22px_80px_rgba(20,15,10,0.32)] sm:p-10">
           <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#d8c3ae]">
@@ -91,10 +87,6 @@ export default async function MerchantLoginPage({
           </p>
           <h2 className="mt-4 text-3xl font-semibold text-foreground">{content.formTitle}</h2>
           <p className="mt-3 text-sm leading-7 text-muted">{content.formDesc}</p>
-
-          <div className="mt-6">
-            <FlashMessage success={messages.success} error={messages.error} />
-          </div>
 
           <form action={loginMerchantAction} className="mt-6 space-y-5">
             <label className="block space-y-2">

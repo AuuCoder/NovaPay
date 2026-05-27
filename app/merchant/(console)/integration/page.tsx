@@ -1,7 +1,6 @@
 import Link from "next/link";
 import {
   AdminPageHeader,
-  FlashMessage,
   buttonClass,
   inputClass,
   panelClass,
@@ -17,7 +16,6 @@ import {
   type CopyFieldItem,
 } from "@/app/merchant/copy-field-list";
 import { loadMerchantDashboardData } from "@/app/merchant/(console)/dashboard-data";
-import type { SearchParamsInput } from "@/app/admin/support";
 import { getCurrentLocale } from "@/lib/i18n-server";
 import { maskStoredSecret } from "@/lib/secret-box";
 
@@ -35,14 +33,9 @@ function hasValue(value?: string | null) {
   return Boolean(value?.trim());
 }
 
-export default async function MerchantIntegrationPage({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
+export default async function MerchantIntegrationPage() {
   const locale = await getCurrentLocale();
   const {
-    messages,
     merchantDisplayName,
     credentialReveal,
     merchant,
@@ -54,7 +47,7 @@ export default async function MerchantIntegrationPage({
     canReadOrders,
     canReadRefunds,
     checkoutTestChannels,
-  } = await loadMerchantDashboardData(searchParams, { locale });
+  } = await loadMerchantDashboardData({ locale });
 
   const content =
     locale === "en"
@@ -463,8 +456,6 @@ export default async function MerchantIntegrationPage({
           </div>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section id="merchant-integration-copy" className={`${panelClass} p-5 sm:p-6`}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">

@@ -88,6 +88,19 @@ function withMessage(path: string, type: "success" | "error", message: string) {
 }
 
 function redirectWithError(path: string, error: unknown) {
+  // Next.js implements `redirect()` by throwing a special error with a digest
+  // starting with "NEXT_REDIRECT". Re-throw it so the runtime can complete the
+  // redirect instead of swallowing it as a server-action failure.
+  if (
+    error &&
+    typeof error === "object" &&
+    "digest" in error &&
+    typeof (error as { digest?: unknown }).digest === "string" &&
+    (error as { digest: string }).digest.startsWith("NEXT_REDIRECT")
+  ) {
+    throw error;
+  }
+
   const message = error instanceof Error ? error.message : "Unexpected error";
   redirect(withMessage(path, "error", message));
 }

@@ -4,13 +4,11 @@ import {
   formatDateTime,
   getActivePaymentChannelOptions,
   readSearchFilters,
-  readPageMessages,
   type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
   EmptyState,
-  FlashMessage,
   LabeledField,
   buttonClass,
   inputClass,
@@ -31,8 +29,7 @@ export default async function BindingsPage({
   await requireAdminPermission("binding:read");
   const prisma = getPrismaClient();
   const locale = await getCurrentLocale();
-  const [messages, filters, paymentChannelOptions] = await Promise.all([
-    readPageMessages(searchParams),
+  const [filters, paymentChannelOptions] = await Promise.all([
     readSearchFilters(searchParams, ["merchantCode", "channelCode", "q"]),
     getActivePaymentChannelOptions(locale),
   ]);
@@ -206,8 +203,6 @@ export default async function BindingsPage({
         title={content.title}
         description={content.description}
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className={`${panelClass} p-6`}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">

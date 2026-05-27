@@ -33,7 +33,7 @@ export default async function DeveloperPluginDetailPage({
     .sort((left, right) => right.version.localeCompare(left.version));
 
   const developerId = session.actorKind === "DEVELOPER" ? session.actorId : null;
-  const canManage = canDeveloperManagePlugin(slug, developerId);
+  const canManage = await canDeveloperManagePlugin(slug, developerId);
 
   const content =
     locale === "en"

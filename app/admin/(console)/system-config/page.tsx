@@ -2,11 +2,10 @@ import {
   saveSystemConfigAction,
   saveSystemConfigBatchAction,
 } from "@/app/admin/actions";
-import { formatDateTime, readPageMessages, type SearchParamsInput } from "@/app/admin/support";
+import { formatDateTime } from "@/app/admin/support";
 import {
   AdminPageHeader,
   EmptyState,
-  FlashMessage,
   LabeledField,
   StatusBadge,
   buttonClass,
@@ -376,14 +375,9 @@ function getOnchainSystemConfigSections(locale: Locale): SystemConfigSectionDefi
   ];
 }
 
-export default async function SystemConfigPage({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
+export default async function SystemConfigPage() {
   await requireAdminPermission("system_config:read");
   const prisma = getPrismaClient();
-  const messages = await readPageMessages(searchParams);
   const locale = await getCurrentLocale();
   const content =
     locale === "en"
@@ -450,8 +444,6 @@ export default async function SystemConfigPage({
         title={content.title}
         description={content.description}
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className={`${panelClass} p-6`}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">

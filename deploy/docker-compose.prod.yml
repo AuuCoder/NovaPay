@@ -1,3 +1,22 @@
+################################################################################
+# NovaPay production deployment.
+#
+# Brings up Postgres + MinIO + main app + plugin registry + 3 background
+# workers, all on a single host.
+#
+# Quick start:
+#
+#   cp .env.docker-compose.example .env
+#   vim .env
+#   docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm migrate
+#   docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm migrate-registry
+#   docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm preflight
+#   docker compose -f deploy/docker-compose.prod.yml up -d
+#
+# The `ops` profile contains one-shot tasks (database migration, preflight
+# checks). They are excluded from `up -d` to keep the long-running stack lean.
+################################################################################
+
 name: novapay
 
 services:
@@ -5,20 +24,70 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${NOVAPAY_POSTGRES_DB:-novapay}
-      POSTGRES_USER: ${NOVAPAY_POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${NOVAPAY_POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_USER:-novapay}
+      POSTGRES_USER: ${POSTGRES_USER:-novapay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-novapay}
     volumes:
       - novapay-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${NOVAPAY_POSTGRES_USER:-postgres} -d ${NOVAPAY_POSTGRES_DB:-novapay}",
+          "pg_isready -U ${POSTGRES_USER:-novapay} -d ${POSTGRES_USER:-novapay}",
         ]
       interval: 10s
       timeout: 5s
       retries: 10
+
+  postgres-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-novapay}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        psql -h postgres -U ${POSTGRES_USER:-novapay} -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='novapay_registry'" \
+          | grep -q 1 \
+          || createdb -h postgres -U ${POSTGRES_USER:-novapay} novapay_registry
+    restart: "no"
+    profiles: ["ops"]
+
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-novapay-minio-access}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-novapay-minio-secret}
+    volumes:
+      - novapay-minio-data:/data
+    # Expose only the console externally if needed; the S3 API stays on the
+    # internal compose network. If you want public download URLs you should
+    # put a reverse proxy (nginx/Caddy) in front of port 9000.
+    ports:
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-novapay-minio-access} ${MINIO_SECRET_KEY:-novapay-minio-secret} &&
+        mc mb -p local/${S3_BUCKET:-novapay-registry-packages} || true
+    restart: "no"
 
   migrate:
     build:
@@ -27,6 +96,19 @@ services:
     env_file:
       - ../.env
     command: npm run db:migrate:deploy
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    profiles: ["ops"]
+
+  migrate-registry:
+    build:
+      context: ../apps/registry
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run prisma:migrate:deploy
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,6 +146,31 @@ services:
         [
           "CMD-SHELL",
           "node -e \"fetch('http://127.0.0.1:3000/api/health').then((response)=>process.exit(response.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  registry:
+    build:
+      context: ../apps/registry
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run start
+    ports:
+      - "3100:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000/api/.well-known/trust.json').then((response)=>process.exit(response.ok?0:1)).catch(()=>process.exit(1))\"",
         ]
       interval: 30s
       timeout: 5s
@@ -107,3 +214,4 @@ services:
 
 volumes:
   novapay-postgres-data:
+  novapay-minio-data:

@@ -7,12 +7,9 @@ import {
   getCallbackStatusTone,
   getPaymentStatusLabel,
   getPaymentStatusTone,
-  readPageMessages,
-  type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
-  FlashMessage,
   StatCard,
   StatusBadge,
   buttonClass,
@@ -26,14 +23,9 @@ import { getCurrentLocale } from "@/lib/i18n-server";
 import { getMerchantDisplayName } from "@/lib/merchant-profile-completion";
 import { getPrismaClient } from "@/lib/prisma";
 
-export default async function AdminDashboardPage({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
+export default async function AdminDashboardPage() {
   await requireAdminPermission("dashboard:view");
   const prisma = getPrismaClient();
-  const messages = await readPageMessages(searchParams);
   const locale = await getCurrentLocale();
   const content =
     locale === "en"
@@ -282,8 +274,6 @@ export default async function AdminDashboardPage({
           </>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard label={content.statMerchants} value={merchantCount} detail={content.statMerchantsDetail} />

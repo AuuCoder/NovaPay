@@ -7,9 +7,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { getPrismaClient } from "../runtime/prisma-client";
 
 export interface DeveloperTokenRecord {
   id: string;
@@ -37,7 +35,7 @@ export interface CreatePatInput {
 }
 
 export interface CreatePatResult {
-  token: string; // raw token, shown only once
+  token: string;
   record: DeveloperTokenRecord;
 }
 
@@ -56,27 +54,6 @@ export type PatAuthOutcome = AuthenticatePatResult | AuthenticatePatError;
 
 const TOKEN_PREFIX = "nvreg_";
 const TOKEN_BYTE_LENGTH = 32;
-const REGISTRY_PROJECT_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-);
-const PAT_STATE_FILE = path.join(
-  REGISTRY_PROJECT_ROOT,
-  ".tmp",
-  "registry-pat-state.json",
-);
-
-interface PersistedDeveloperTokenRecord
-  extends Omit<DeveloperTokenRecord, "lastUsedAt" | "createdAt" | "revokedAt"> {
-  lastUsedAt: string | null;
-  createdAt: string;
-  revokedAt: string | null;
-}
-
-interface PatStateSnapshot {
-  tokens: PersistedDeveloperTokenRecord[];
-}
 
 export function generateRawToken(): string {
   return `${TOKEN_PREFIX}${randomBytes(TOKEN_BYTE_LENGTH).toString("hex")}`;
@@ -89,42 +66,6 @@ export function hashToken(rawToken: string): string {
 export function maskTokenForDisplay(rawToken: string): string {
   const suffix = rawToken.slice(-4);
   return `${TOKEN_PREFIX}******${suffix}`;
-}
-
-function loadPatState(): PatStateSnapshot {
-  if (!existsSync(PAT_STATE_FILE)) {
-    return { tokens: [] };
-  }
-
-  try {
-    return JSON.parse(readFileSync(PAT_STATE_FILE, "utf8")) as PatStateSnapshot;
-  } catch {
-    return { tokens: [] };
-  }
-}
-
-function savePatState(state: PatStateSnapshot) {
-  mkdirSync(path.dirname(PAT_STATE_FILE), { recursive: true });
-  writeFileSync(PAT_STATE_FILE, JSON.stringify(state, null, 2), "utf8");
-}
-
-function toPersistedRecord(record: DeveloperTokenRecord): PersistedDeveloperTokenRecord {
-  return {
-    ...record,
-    lastUsedAt: record.lastUsedAt?.toISOString() ?? null,
-    createdAt: record.createdAt.toISOString(),
-    revokedAt: record.revokedAt?.toISOString() ?? null,
-  };
-}
-
-function toTokenRecord(record: PersistedDeveloperTokenRecord): DeveloperTokenRecord {
-  return {
-    ...record,
-    tokenPreview: record.tokenPreview ?? `${TOKEN_PREFIX}******unknown`,
-    lastUsedAt: record.lastUsedAt ? new Date(record.lastUsedAt) : null,
-    createdAt: new Date(record.createdAt),
-    revokedAt: record.revokedAt ? new Date(record.revokedAt) : null,
-  };
 }
 
 export function createPat(input: CreatePatInput): CreatePatResult {
@@ -212,58 +153,105 @@ export function createInMemoryPatStore(): PatStore {
   };
 }
 
+interface DeveloperTokenRow {
+  id: string;
+  developerId: string;
+  tokenHash: string;
+  tokenPreview: string;
+  name: string;
+  status: "ACTIVE" | "REVOKED";
+  lastUsedAt: Date | null;
+  createdAt: Date;
+  revokedAt: Date | null;
+}
+
+function fromRow(row: DeveloperTokenRow): DeveloperTokenRecord {
+  return {
+    id: row.id,
+    developerId: row.developerId,
+    tokenHash: row.tokenHash,
+    tokenPreview: row.tokenPreview,
+    name: row.name,
+    status: row.status,
+    lastUsedAt: row.lastUsedAt,
+    createdAt: row.createdAt,
+    revokedAt: row.revokedAt,
+  };
+}
+
 export function createPersistentPatStore(): PatStore {
   return {
     async create(record) {
-      const state = loadPatState();
-      state.tokens.push(toPersistedRecord(record));
-      savePatState(state);
-      return { ...record };
+      const prisma = (await getPrismaClient()) as unknown as {
+        developerToken: { create(args: unknown): Promise<DeveloperTokenRow> };
+      } | null;
+      if (!prisma) throw new Error("Registry database not available.");
+      const row = await prisma.developerToken.create({
+        data: {
+          id: record.id,
+          developerId: record.developerId,
+          tokenHash: record.tokenHash,
+          tokenPreview: record.tokenPreview,
+          name: record.name,
+          status: record.status,
+          lastUsedAt: record.lastUsedAt,
+          createdAt: record.createdAt,
+          revokedAt: record.revokedAt,
+        },
+      });
+      return fromRow(row);
     },
     async findByHash(tokenHash) {
-      const state = loadPatState();
-      const record = state.tokens.find((item) => item.tokenHash === tokenHash);
-      return record ? toTokenRecord(record) : null;
+      const prisma = (await getPrismaClient()) as unknown as {
+        developerToken: { findUnique(args: unknown): Promise<DeveloperTokenRow | null> };
+      } | null;
+      if (!prisma) return null;
+      const row = await prisma.developerToken.findUnique({
+        where: { tokenHash },
+      });
+      return row ? fromRow(row) : null;
     },
     async revoke(id, developerId) {
-      const state = loadPatState();
-      const index = state.tokens.findIndex(
-        (item) => item.id === id && item.developerId === developerId,
-      );
+      const prisma = (await getPrismaClient()) as unknown as {
+        developerToken: {
+          findUnique(args: unknown): Promise<DeveloperTokenRow | null>;
+          update(args: unknown): Promise<DeveloperTokenRow>;
+        };
+      } | null;
+      if (!prisma) return null;
 
-      if (index < 0) {
-        return null;
-      }
+      const existing = await prisma.developerToken.findUnique({ where: { id } });
+      if (!existing || existing.developerId !== developerId) return null;
 
-      const updated = {
-        ...state.tokens[index]!,
-        status: "REVOKED" as const,
-        revokedAt: new Date().toISOString(),
-      };
-      state.tokens[index] = updated;
-      savePatState(state);
-      return toTokenRecord(updated);
+      const updated = await prisma.developerToken.update({
+        where: { id },
+        data: {
+          status: "REVOKED",
+          revokedAt: new Date(),
+        },
+      });
+      return fromRow(updated);
     },
     async listByDeveloper(developerId) {
-      const state = loadPatState();
-      return state.tokens
-        .filter((item) => item.developerId === developerId)
-        .map((item) => toTokenRecord(item))
-        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+      const prisma = (await getPrismaClient()) as unknown as {
+        developerToken: { findMany(args: unknown): Promise<DeveloperTokenRow[]> };
+      } | null;
+      if (!prisma) return [];
+      const rows = await prisma.developerToken.findMany({
+        where: { developerId },
+        orderBy: { createdAt: "desc" },
+      });
+      return rows.map(fromRow);
     },
     async updateLastUsed(id) {
-      const state = loadPatState();
-      const index = state.tokens.findIndex((item) => item.id === id);
-
-      if (index < 0) {
-        return;
-      }
-
-      state.tokens[index] = {
-        ...state.tokens[index]!,
-        lastUsedAt: new Date().toISOString(),
-      };
-      savePatState(state);
+      const prisma = (await getPrismaClient()) as unknown as {
+        developerToken: { update(args: unknown): Promise<DeveloperTokenRow> };
+      } | null;
+      if (!prisma) return;
+      await prisma.developerToken.update({
+        where: { id },
+        data: { lastUsedAt: new Date() },
+      }).catch(() => null);
     },
   };
 }

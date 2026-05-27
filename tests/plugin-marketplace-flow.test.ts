@@ -10,6 +10,7 @@ import {
   MerchantPluginInstallError,
   purchaseAndIssueLicense,
   setMarketplacePluginEnabledState,
+  syncBuiltinMarketplacePlugins,
 } from "../lib/plugins/marketplace";
 import { invalidateSystemConfigCache } from "../lib/system-config";
 
@@ -310,7 +311,7 @@ function createFlowPrismaStub(input: {
         }
         return null;
       },
-      async findMany(args?: { where?: Partial<MarketplacePluginRow>; select?: Record<string, boolean> }) {
+      async findMany(args?: { where?: Partial<MarketplacePluginRow> & { slug?: { in: string[] } | string }; select?: Record<string, boolean> }) {
         const rows = [...marketplacePlugins.values()].filter((row) => {
           if (!args?.where) {
             return true;
@@ -318,6 +319,9 @@ function createFlowPrismaStub(input: {
           return Object.entries(args.where).every(([key, value]) => {
             if (value === undefined) {
               return true;
+            }
+            if (key === "slug" && value && typeof value === "object" && "in" in value) {
+              return (value as { in: string[] }).in.includes(row.slug);
             }
             return (row as unknown as Record<string, unknown>)[key] === value;
           });
@@ -336,6 +340,31 @@ function createFlowPrismaStub(input: {
         } satisfies MarketplacePluginRow;
         marketplacePlugins.set(existing.slug, next);
         return clonePlugin(next);
+      },
+      async updateMany(args: { where: Partial<MarketplacePluginRow> & { slug?: { in: string[] } | string }; data: Partial<MarketplacePluginRow> }) {
+        let count = 0;
+        for (const row of marketplacePlugins.values()) {
+          const matches = Object.entries(args.where).every(([key, value]) => {
+            if (value === undefined) {
+              return true;
+            }
+            if (key === "slug" && value && typeof value === "object" && "in" in value) {
+              return (value as { in: string[] }).in.includes(row.slug);
+            }
+            return (row as unknown as Record<string, unknown>)[key] === value;
+          });
+          if (!matches) {
+            continue;
+          }
+          const next = {
+            ...row,
+            ...args.data,
+            updatedAt: new Date(),
+          } satisfies MarketplacePluginRow;
+          marketplacePlugins.set(row.slug, next);
+          count += 1;
+        }
+        return { count };
       },
     },
     pluginRegistrySource: {
@@ -460,8 +489,35 @@ function createFlowPrismaStub(input: {
         packageInstalls.set(row.id, row);
         return cloneInstall(row);
       },
-      async findMany() {
-        return [...packageInstalls.values()].map((row) => ({
+      async findMany(args?: {
+        where?: {
+          pluginSlug?: string | { in: string[] };
+          status?: { in: string[] };
+        };
+        select?: Record<string, boolean>;
+      }) {
+        const rows = [...packageInstalls.values()].filter((row) => {
+          if (!args?.where) {
+            return true;
+          }
+          if (args.where.pluginSlug !== undefined) {
+            const slugFilter = args.where.pluginSlug;
+            if (typeof slugFilter === "string") {
+              if (row.pluginSlug !== slugFilter) {
+                return false;
+              }
+            } else if (slugFilter && "in" in slugFilter) {
+              if (!slugFilter.in.includes(row.pluginSlug)) {
+                return false;
+              }
+            }
+          }
+          if (args.where.status?.in && !args.where.status.in.includes(row.status)) {
+            return false;
+          }
+          return true;
+        });
+        return rows.map((row) => ({
           ...cloneInstall(row),
           plugin: { channelCode: marketplacePlugins.get(row.pluginSlug)?.channelCode ?? null },
         }));
@@ -549,6 +605,14 @@ function createFlowPrismaStub(input: {
   return {
     stub,
     getPlugin: (slug: string) => clonePlugin(marketplacePlugins.get(slug) ?? null),
+    setPlugin: (slug: string, patch: Partial<MarketplacePluginRow>) => {
+      const existing = marketplacePlugins.get(slug);
+      if (!existing) {
+        throw new Error(`Plugin not found: ${slug}`);
+      }
+      const next = { ...existing, ...patch, updatedAt: new Date() } satisfies MarketplacePluginRow;
+      marketplacePlugins.set(slug, next);
+    },
     listPurchaseRecords: () => [...purchaseRecords.values()].map((row) => clonePurchase(row)),
     listPackageInstalls: () => [...packageInstalls.values()].map((row) => cloneInstall(row)),
     listMerchantInstalls: () => [...merchantInstalls.values()].map((row) => cloneMerchantInstall(row)),
@@ -817,5 +881,30 @@ test("plugin marketplace flow rejects merchant assignment when the paid license 
     );
 
     assert.equal(stubState.listMerchantInstalls().length, 0);
+  });
+});
+
+test("plugin marketplace reconciles legacy BUILTIN-installed paid plugins back to not-installed", async () => {
+  await withMarketplaceFlowContext(async ({ stubState, plugin }) => {
+    // Simulate the historical bug: the slug used to be a built-in plugin so
+    // it still has installed=true,enabled=true left over even though the
+    // remote registry has reclassified it as PAID + REMOTE_SIGNED and no
+    // PluginPackageInstall row exists.
+    stubState.setPlugin(plugin.slug, {
+      installed: true,
+      enabled: true,
+      installedAt: new Date(),
+      purchasedAt: null,
+    });
+
+    // Force a sync; reconcile runs at the end of syncBuiltinMarketplacePlugins
+    // and should clean up the stale flags. force=true bypasses the
+    // module-level rate limiter that may have been set by a prior test.
+    await syncBuiltinMarketplacePlugins(true);
+
+    const reconciled = stubState.getPlugin(plugin.slug);
+    assert.equal(reconciled?.installed, false);
+    assert.equal(reconciled?.enabled, false);
+    assert.equal(reconciled?.installedAt, null);
   });
 });

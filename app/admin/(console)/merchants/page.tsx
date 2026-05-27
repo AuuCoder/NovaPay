@@ -8,14 +8,12 @@ import {
   getMerchantStatusLabel,
   getMerchantStatusTone,
   parsePageParam,
-  readPageMessages,
   readSearchFilters,
   type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
   EmptyState,
-  FlashMessage,
   LabeledField,
   PaginationNav,
   StatCard,
@@ -44,8 +42,7 @@ export default async function MerchantsPage({
   const prisma = getPrismaClient();
   const canReview = hasPermission(session.adminUser.role, "merchant:write");
   const locale = await getCurrentLocale();
-  const [messages, filters, paymentChannelOptions] = await Promise.all([
-    readPageMessages(searchParams),
+  const [filters, paymentChannelOptions] = await Promise.all([
     readSearchFilters(searchParams, ["q", "callback", "status", "channelCode", "page"]),
     getActivePaymentChannelOptions(locale),
   ]);
@@ -366,8 +363,6 @@ export default async function MerchantsPage({
           </Link>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard label={content.statMerchants} value={merchantCount} detail={content.statMerchantsDetail} />

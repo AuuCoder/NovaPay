@@ -42,7 +42,9 @@ async function loadClient(): Promise<PrismaClientLike | null> {
     if (!PrismaClientCtor) return null;
 
     const { PrismaPg } = await import("@prisma/adapter-pg").catch(() => ({ PrismaPg: null }));
-    const connectionString = process.env.DATABASE_URL?.trim();
+    const connectionString =
+      process.env.REGISTRY_DATABASE_URL?.trim() ||
+      process.env.DATABASE_URL?.trim();
     if (!PrismaPg || !connectionString) {
       return null;
     }

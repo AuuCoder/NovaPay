@@ -7,13 +7,10 @@ import {
 } from "@/app/admin/actions";
 import {
   formatDateTime,
-  readPageMessages,
-  type SearchParamsInput,
 } from "@/app/admin/support";
 import {
   AdminPageHeader,
   EmptyState,
-  FlashMessage,
   LabeledField,
   StatusBadge,
   buttonClass,
@@ -63,14 +60,9 @@ function getSourceAuditActionLabel(
   );
 }
 
-export default async function PluginSourcesPage({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
+export default async function PluginSourcesPage() {
   await requireAdminPermission("plugin_marketplace:read");
   const locale = await getCurrentLocale();
-  const messages = await readPageMessages(searchParams);
   const prisma = getPrismaClient();
   const [sources, auditLogs] = await Promise.all([
     prisma.pluginRegistrySource.findMany({
@@ -222,8 +214,6 @@ export default async function PluginSourcesPage({
           </Link>
         }
       />
-
-      <FlashMessage success={messages.success} error={messages.error} />
 
       <section className={`${panelClass} p-6`}>
         <h2 className="text-2xl font-semibold text-foreground">{content.createTitle}</h2>

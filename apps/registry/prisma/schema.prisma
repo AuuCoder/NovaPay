@@ -94,15 +94,83 @@ model Developer {
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
 
-  plugins        PluginRecord[]
-  auditLogs      AuditLog[]      @relation("AuditLogActorDeveloper")
-  ledgerEntries  RegistryLedgerEntry[]
-  orders         Order[]
-  licenses       License[]
-  payoutAccounts PayoutAccount[]
-  payoutRequests PayoutRequest[]
+  plugins                  PluginRecord[]
+  auditLogs                AuditLog[]                @relation("AuditLogActorDeveloper")
+  ledgerEntries            RegistryLedgerEntry[]
+  orders                   Order[]
+  licenses                 License[]
+  payoutAccounts           PayoutAccount[]
+  payoutRequests           PayoutRequest[]
+  pluginOwnerships         PluginOwnership[]
+  developerTokens          DeveloperToken[]
+  emailVerificationTokens  EmailVerificationToken[]
+  registrySessions         RegistrySession[]
 
   @@index([status, createdAt])
+}
+
+model EmailVerificationToken {
+  token        String     @id
+  developerId  String
+  developer    Developer  @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@index([developerId])
+}
+
+model RegistrySession {
+  /** sha256(rawToken). The raw token is only stored in the user's cookie. */
+  id           String     @id
+  actorKind    String     // "DEVELOPER" | "ADMIN_SSO"
+  actorId      String
+  developerId  String?
+  developer    Developer? @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  email        String
+  displayName  String
+  role         String?
+  createdAt    DateTime   @default(now())
+  lastSeenAt   DateTime   @default(now())
+  expiresAt    DateTime
+
+  @@index([expiresAt])
+  @@index([actorId, expiresAt])
+}
+
+model DeveloperToken {
+  id           String      @id
+  developerId  String
+  developer    Developer   @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  tokenHash    String      @unique
+  tokenPreview String
+  name         String
+  status       String      @default("ACTIVE")  // "ACTIVE" | "REVOKED"
+  lastUsedAt   DateTime?
+  createdAt    DateTime    @default(now())
+  revokedAt    DateTime?
+
+  @@index([developerId, status])
+}
+
+model PluginOwnership {
+  slug         String     @id
+  developerId  String
+  developer    Developer  @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@index([developerId])
+}
+
+model SigningKeyMaterial {
+  /** Matches SigningKey.keyId (1:1). Stored separately so private key never
+   *  leaves the security boundary even when SigningKey is exported. */
+  keyId               String   @id
+  /** Sealed (AES-GCM) PEM-encoded private key. Encrypted via secret-box. */
+  privateKeySealed    String?  @db.Text
+  publicKey           String
+  kmsKeyArn           String?
+  createdAt           DateTime @default(now())
+
+  @@index([createdAt])
 }
 
 model PluginRecord {
@@ -157,15 +225,62 @@ model PluginVersion {
   rejectReason String?      @db.Text
   publishedAt  DateTime?
   capabilities Json
+  /** Per-version pricing snapshot, captured at upload time */
+  pricingMode      PluginPricingMode @default(FREE)
+  pricingPlanKind  PricingPlanKind?
+  priceAmountCents Int?
+  priceCurrency    String?
+  priceLabel       String?
+  purchaseUrl      String?
+  /** Static scan result (warnings/errors); null until scan runs */
+  scanResult   Json?
   assetId      String       @unique
   asset        PluginAsset  @relation(fields: [assetId], references: [id])
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
-  reviewWorkflow ReviewWorkflow?
+  reviewWorkflow      ReviewWorkflow?
+  verificationSessions PluginVersionTestSession[]
 
   @@unique([pluginId, version])
   @@index([reviewState, createdAt])
+}
+
+model PluginVersionTestSession {
+  id                  String                       @id @default(cuid())
+  pluginVersionId     String
+  pluginVersion       PluginVersion                @relation(fields: [pluginVersionId], references: [id], onDelete: Cascade)
+  pluginSlug          String
+  version             String
+  status              String                       @default("DRAFT") // DRAFT/RUNNING/WAITING_MANUAL_PAYMENT/PASSED/FAILED/EXPIRED
+  verificationProfile Json
+  submittedConfig     Json
+  startedAt           DateTime?
+  completedAt         DateTime?
+  expiresAt           DateTime?
+  failureReason       String?                      @db.Text
+  resultSnapshot      Json?
+  createdAt           DateTime                     @default(now())
+  updatedAt           DateTime                     @updatedAt
+
+  steps PluginVersionTestStep[]
+
+  @@index([pluginSlug, version, status])
+  @@index([status, expiresAt])
+}
+
+model PluginVersionTestStep {
+  id            String                   @id @default(cuid())
+  sessionId     String
+  session       PluginVersionTestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  stepKey       String
+  status        String                   @default("PENDING") // PENDING/RUNNING/PASSED/FAILED/SKIPPED
+  startedAt     DateTime?
+  completedAt   DateTime?
+  errorMessage  String?                  @db.Text
+  resultSnapshot Json?
+
+  @@index([sessionId])
 }
 
 model PluginAsset {

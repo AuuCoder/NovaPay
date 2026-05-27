@@ -80,15 +80,6 @@ export function buildPageHref(
   return query ? `${basePath}?${query}` : basePath;
 }
 
-export async function readPageMessages(searchParams: SearchParamsInput) {
-  const resolved = (await searchParams) ?? {};
-
-  return {
-    success: firstValue(resolved.success) ?? null,
-    error: firstValue(resolved.error) ?? null,
-  };
-}
-
 export async function readSearchFilters(
   searchParams: SearchParamsInput,
   keys: string[],
@@ -117,6 +108,8 @@ export function formatDateTime(
   return new Intl.DateTimeFormat(locale === "en" ? "en-US" : "zh-CN", {
     dateStyle: "medium",
     timeStyle: "short",
+    timeZone: "Asia/Shanghai",
+    hour12: false,
   }).format(date);
 }
 

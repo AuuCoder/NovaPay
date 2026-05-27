@@ -351,7 +351,7 @@ function renderUsdtCheckoutPage(input: {
               <p class="meta-label">报价截止</p>
               <p class="meta-value">${escapeHtml(
                 effectiveExpireAt
-                  ? effectiveExpireAt.toLocaleString("zh-CN", { hour12: false })
+                  ? effectiveExpireAt.toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" })
                   : "按系统时效",
               )}</p>
             </article>
@@ -709,7 +709,7 @@ async function renderWxpayCheckoutPage(input: {
             </article>
             <article class="meta-item">
               <p class="meta-label">失效时间</p>
-              <p class="meta-value">${escapeHtml(input.expireAt ? input.expireAt.toLocaleString("zh-CN", { hour12: false }) : "按通道默认时效")}</p>
+              <p class="meta-value">${escapeHtml(input.expireAt ? input.expireAt.toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }) : "按通道默认时效")}</p>
             </article>
           </div>
 
@@ -1012,7 +1012,7 @@ function renderAlipayCheckoutPage(input: {
             </article>
             <article class="meta-item">
               <p class="meta-label">失效时间</p>
-              <p class="meta-value">${escapeHtml(input.expireAt ? input.expireAt.toLocaleString("zh-CN", { hour12: false }) : "按通道默认时效")}</p>
+              <p class="meta-value">${escapeHtml(input.expireAt ? input.expireAt.toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }) : "按通道默认时效")}</p>
             </article>
           </div>
 

@@ -6,13 +6,11 @@
  * until an admin approves or rejects. Insufficient available balance triggers
  * INSUFFICIENT_BALANCE.
  *
- * Phase 3 keeps the ledger in memory. Production deployments swap it for a
- * Prisma-backed ledger with append-only entries and idempotent crediting.
+ * Production uses the Prisma-backed implementation; the in-memory variant is
+ * kept for unit tests.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { getSettlementSettings } from "../settlement/settings";
 
 export interface LedgerEntry {
@@ -80,54 +78,6 @@ interface HoldDaysOptions {
 
 const DEFAULT_CURRENCY = "CNY";
 
-interface PersistedLedgerEntry extends Omit<LedgerEntry, "occurredAt"> {
-  occurredAt: string;
-}
-
-interface PersistedPayoutRequest
-  extends Omit<PayoutRequest, "createdAt" | "updatedAt" | "processedAt"> {
-  createdAt: string;
-  updatedAt: string;
-  processedAt?: string | null;
-}
-
-interface LedgerSnapshot {
-  entries: PersistedLedgerEntry[];
-  payouts: PersistedPayoutRequest[];
-}
-
-function toPersistedEntry(entry: LedgerEntry): PersistedLedgerEntry {
-  return {
-    ...entry,
-    occurredAt: entry.occurredAt.toISOString(),
-  };
-}
-
-function toPersistedPayout(request: PayoutRequest): PersistedPayoutRequest {
-  return {
-    ...request,
-    createdAt: request.createdAt.toISOString(),
-    updatedAt: request.updatedAt.toISOString(),
-    processedAt: request.processedAt?.toISOString() ?? null,
-  };
-}
-
-function toLedgerEntry(entry: PersistedLedgerEntry): LedgerEntry {
-  return {
-    ...entry,
-    occurredAt: new Date(entry.occurredAt),
-  };
-}
-
-function toPayoutRequest(request: PersistedPayoutRequest): PayoutRequest {
-  return {
-    ...request,
-    createdAt: new Date(request.createdAt),
-    updatedAt: new Date(request.updatedAt),
-    processedAt: request.processedAt ? new Date(request.processedAt) : null,
-  };
-}
-
 function computeHeldCreditsFromEntries(input: {
   entries: LedgerEntry[];
   developerId: string;
@@ -178,8 +128,6 @@ export function createInMemoryBalanceLedger(
       if (
         payout.developerId === developerId &&
         payout.currency === currency &&
-        // Only PENDING_REVIEW freezes funds; once APPROVED a debit ledger entry
-        // is recorded so we no longer need to count the request as frozen.
         payout.state === "PENDING_REVIEW"
       ) {
         frozen += payout.amountCents;
@@ -255,7 +203,6 @@ export function createInMemoryBalanceLedger(
       req.state = "APPROVED";
       req.adminNote = adminNote ?? null;
       req.updatedAt = new Date();
-      // Debit the developer balance immediately on approval (Req 4.4).
       entries.push({
         id: `led_${randomUUID()}`,
         developerId: req.developerId,
@@ -278,8 +225,6 @@ export function createInMemoryBalanceLedger(
       req.state = "REJECTED";
       req.adminNote = adminNote;
       req.updatedAt = new Date();
-      // Frozen amount is released because state is no longer PENDING_REVIEW
-      // (computeBalance only freezes pending/approved/processing).
       return { success: true, request: { ...req } };
     },
 
@@ -297,70 +242,105 @@ export function createInMemoryBalanceLedger(
   };
 }
 
-export function createPersistentBalanceLedger(
-  filePath: string,
+interface PrismaLedgerLike {
+  registryLedgerEntry: {
+    findMany(args: unknown): Promise<unknown[]>;
+    findFirst(args: unknown): Promise<unknown>;
+    create(args: unknown): Promise<unknown>;
+  };
+  payoutRequest: {
+    findMany(args: unknown): Promise<unknown[]>;
+    findUnique(args: unknown): Promise<unknown>;
+    create(args: unknown): Promise<unknown>;
+    update(args: unknown): Promise<unknown>;
+  };
+}
+
+interface LedgerEntryRow {
+  id: string;
+  developerId: string;
+  amountCents: number;
+  currency: string;
+  reason: string;
+  externalRef: string;
+  occurredAt: Date;
+}
+
+interface PayoutRequestRow {
+  id: string;
+  developerId: string;
+  payoutAccountId: string;
+  amountCents: number;
+  currency: string;
+  state: PayoutRequest["state"];
+  adminNote: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  processedAt: Date | null;
+}
+
+function fromLedgerRow(row: LedgerEntryRow): LedgerEntry {
+  return {
+    id: row.id,
+    developerId: row.developerId,
+    amountCents: row.amountCents,
+    currency: row.currency,
+    reason: row.reason,
+    externalRef: row.externalRef,
+    occurredAt: row.occurredAt,
+  };
+}
+
+function fromPayoutRow(row: PayoutRequestRow): PayoutRequest {
+  return {
+    id: row.id,
+    developerId: row.developerId,
+    payoutAccountId: row.payoutAccountId,
+    amountCents: row.amountCents,
+    currency: row.currency,
+    state: row.state,
+    adminNote: row.adminNote,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    processedAt: row.processedAt,
+  };
+}
+
+export function createPrismaBalanceLedger(
+  prisma: PrismaLedgerLike,
   options: HoldDaysOptions = {},
 ): BalanceLedger {
-  function loadSnapshot(): LedgerSnapshot {
-    if (!existsSync(filePath)) {
-      return { entries: [], payouts: [] };
-    }
-
-    try {
-      return JSON.parse(readFileSync(filePath, "utf8")) as LedgerSnapshot;
-    } catch {
-      return { entries: [], payouts: [] };
-    }
-  }
-
-  function saveSnapshot(entries: LedgerEntry[], payouts: Map<string, PayoutRequest>) {
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    const snapshot: LedgerSnapshot = {
-      entries: entries.map(toPersistedEntry),
-      payouts: [...payouts.values()].map(toPersistedPayout),
-    };
-    writeFileSync(filePath, JSON.stringify(snapshot, null, 2), "utf8");
-  }
-
-  const snapshot = loadSnapshot();
-  const entries: LedgerEntry[] = snapshot.entries.map(toLedgerEntry);
-  const payouts = new Map<string, PayoutRequest>(
-    snapshot.payouts.map((item) => [item.id, toPayoutRequest(item)]),
-  );
-  const seenRefs = new Set(entries.map((entry) => entry.externalRef));
-
   async function resolveHoldDays() {
     if (options.holdDaysResolver) {
       return Math.max(0, Math.trunc(await options.holdDaysResolver()));
     }
-
     const settings = await getSettlementSettings();
     return Math.max(0, Math.trunc(settings.payoutHoldDays));
   }
 
+  async function fetchEntries(developerId: string, currency: string): Promise<LedgerEntry[]> {
+    const rows = (await prisma.registryLedgerEntry.findMany({
+      where: { developerId, currency },
+    })) as LedgerEntryRow[];
+    return rows.map(fromLedgerRow);
+  }
+
   async function computeBalance(developerId: string, currency: string): Promise<BalanceSnapshot> {
-    let total = 0;
-    for (const entry of entries) {
-      if (entry.developerId === developerId && entry.currency === currency) {
-        total += entry.amountCents;
-      }
-    }
-    let frozen = 0;
-    for (const payout of payouts.values()) {
-      if (
-        payout.developerId === developerId &&
-        payout.currency === currency &&
-        payout.state === "PENDING_REVIEW"
-      ) {
-        frozen += payout.amountCents;
-      }
-    }
+    const entries = await fetchEntries(developerId, currency);
+    const total = entries.reduce((sum, entry) => sum + entry.amountCents, 0);
+
+    const pendingPayouts = (await prisma.payoutRequest.findMany({
+      where: { developerId, currency, state: "PENDING_REVIEW" },
+    })) as PayoutRequestRow[];
+    const frozen = pendingPayouts.reduce((sum, row) => sum + row.amountCents, 0);
+
     const heldCredits = computeHeldCreditsFromEntries({
       entries,
       developerId,
       currency,
       holdDays: await resolveHoldDays(),
     });
+
     return {
       total,
       frozen: frozen + heldCredits,
@@ -371,26 +351,23 @@ export function createPersistentBalanceLedger(
 
   return {
     async credit(input) {
-      if (seenRefs.has(input.externalRef)) {
-        const existing = entries.find((entry) => entry.externalRef === input.externalRef);
-        if (existing) {
-          return { ...existing };
-        }
+      const existing = (await prisma.registryLedgerEntry.findFirst({
+        where: { externalRef: input.externalRef },
+      })) as LedgerEntryRow | null;
+      if (existing) {
+        return fromLedgerRow(existing);
       }
-
-      const entry: LedgerEntry = {
-        id: `led_${randomUUID()}`,
-        developerId: input.developerId,
-        amountCents: input.amountCents,
-        currency: input.currency,
-        reason: input.reason,
-        externalRef: input.externalRef,
-        occurredAt: new Date(),
-      };
-      entries.push(entry);
-      seenRefs.add(input.externalRef);
-      saveSnapshot(entries, payouts);
-      return { ...entry };
+      const row = (await prisma.registryLedgerEntry.create({
+        data: {
+          id: `led_${randomUUID()}`,
+          developerId: input.developerId,
+          amountCents: input.amountCents,
+          currency: input.currency,
+          reason: input.reason,
+          externalRef: input.externalRef,
+        },
+      })) as LedgerEntryRow;
+      return fromLedgerRow(row);
     },
 
     async getBalance(developerId, currency = DEFAULT_CURRENCY) {
@@ -405,72 +382,87 @@ export function createPersistentBalanceLedger(
       if (balance.available < amountCents) {
         return { success: false, errorCode: "INSUFFICIENT_BALANCE" };
       }
-      const now = new Date();
-      const request: PayoutRequest = {
-        id: `pyo_${randomUUID()}`,
-        developerId,
-        payoutAccountId,
-        amountCents,
-        currency,
-        state: "PENDING_REVIEW",
-        createdAt: now,
-        updatedAt: now,
-      };
-      payouts.set(request.id, request);
-      saveSnapshot(entries, payouts);
-      return { success: true, request: { ...request } };
+      const row = (await prisma.payoutRequest.create({
+        data: {
+          id: `pyo_${randomUUID()}`,
+          developerId,
+          payoutAccountId,
+          amountCents,
+          currency,
+          state: "PENDING_REVIEW",
+        },
+      })) as PayoutRequestRow;
+      return { success: true, request: fromPayoutRow(row) };
     },
 
     async approvePayout({ requestId, adminNote }) {
-      const req = payouts.get(requestId);
-      if (!req) return { success: false, errorCode: "NOT_FOUND" };
-      if (req.state !== "PENDING_REVIEW") {
+      const existing = (await prisma.payoutRequest.findUnique({
+        where: { id: requestId },
+      })) as PayoutRequestRow | null;
+      if (!existing) return { success: false, errorCode: "NOT_FOUND" };
+      if (existing.state !== "PENDING_REVIEW") {
         return { success: false, errorCode: "INVALID_STATE" };
       }
-      req.state = "APPROVED";
-      req.adminNote = adminNote ?? null;
-      req.updatedAt = new Date();
-      req.processedAt = new Date();
-      entries.push({
-        id: `led_${randomUUID()}`,
-        developerId: req.developerId,
-        amountCents: -req.amountCents,
-        currency: req.currency,
-        reason: "PAYOUT_APPROVED",
-        externalRef: req.id,
-        occurredAt: new Date(),
+
+      const updated = (await prisma.payoutRequest.update({
+        where: { id: requestId },
+        data: {
+          state: "APPROVED",
+          adminNote: adminNote ?? null,
+          processedAt: new Date(),
+        },
+      })) as PayoutRequestRow;
+
+      // Append a debit ledger entry to deduct the payout immediately.
+      await prisma.registryLedgerEntry.create({
+        data: {
+          id: `led_${randomUUID()}`,
+          developerId: existing.developerId,
+          amountCents: -existing.amountCents,
+          currency: existing.currency,
+          reason: "PAYOUT_APPROVED",
+          externalRef: existing.id,
+        },
       });
-      seenRefs.add(req.id);
-      saveSnapshot(entries, payouts);
-      return { success: true, request: { ...req } };
+
+      return { success: true, request: fromPayoutRow(updated) };
     },
 
     async rejectPayout({ requestId, adminNote }) {
-      const req = payouts.get(requestId);
-      if (!req) return { success: false, errorCode: "NOT_FOUND" };
-      if (req.state !== "PENDING_REVIEW") {
+      const existing = (await prisma.payoutRequest.findUnique({
+        where: { id: requestId },
+      })) as PayoutRequestRow | null;
+      if (!existing) return { success: false, errorCode: "NOT_FOUND" };
+      if (existing.state !== "PENDING_REVIEW") {
         return { success: false, errorCode: "INVALID_STATE" };
       }
-      req.state = "REJECTED";
-      req.adminNote = adminNote;
-      req.updatedAt = new Date();
-      req.processedAt = new Date();
-      saveSnapshot(entries, payouts);
-      return { success: true, request: { ...req } };
+
+      const updated = (await prisma.payoutRequest.update({
+        where: { id: requestId },
+        data: {
+          state: "REJECTED",
+          adminNote,
+          processedAt: new Date(),
+        },
+      })) as PayoutRequestRow;
+
+      return { success: true, request: fromPayoutRow(updated) };
     },
 
     async listPayouts(developerId) {
-      return [...payouts.values()]
-        .filter((request) => !developerId || request.developerId === developerId)
-        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
-        .map((request) => ({ ...request }));
+      const rows = (await prisma.payoutRequest.findMany({
+        where: developerId ? { developerId } : undefined,
+        orderBy: { createdAt: "desc" },
+      })) as PayoutRequestRow[];
+      return rows.map(fromPayoutRow);
     },
 
     async listEntries(developerId) {
-      return entries
-        .filter((entry) => entry.developerId === developerId)
-        .sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime())
-        .map((entry) => ({ ...entry }));
+      const rows = (await prisma.registryLedgerEntry.findMany({
+        where: { developerId },
+        orderBy: { occurredAt: "desc" },
+      })) as LedgerEntryRow[];
+      return rows.map(fromLedgerRow);
     },
   };
 }

@@ -1,8 +1,4 @@
 import { notFound } from "next/navigation";
-import {
-  readPageMessages,
-  type SearchParamsInput,
-} from "@/app/admin/support";
 import { PaymentStatus } from "@/generated/prisma/enums";
 import { getCurrentLocale } from "@/lib/i18n-server";
 import { readMerchantCredentialReveal } from "@/lib/merchant-credential-reveal";
@@ -17,15 +13,11 @@ import { getPublicBaseUrl } from "@/lib/env";
 import { listMerchantInstalledPaymentChannels } from "@/lib/plugins/marketplace";
 import { getPrismaClient } from "@/lib/prisma";
 
-export async function loadMerchantDashboardData(
-  searchParams?: SearchParamsInput,
-  options?: {
-    locale?: Locale;
-  },
-) {
+export async function loadMerchantDashboardData(options?: {
+  locale?: Locale;
+}) {
   const session = await requireMerchantSession();
   const prisma = getPrismaClient();
-  const messages = await readPageMessages(searchParams);
   const locale = options?.locale ?? (await getCurrentLocale());
   const credentialReveal = await readMerchantCredentialReveal();
   const merchant = await prisma.merchant.findUnique({
@@ -234,7 +226,6 @@ export async function loadMerchantDashboardData(
 
   return {
     session,
-    messages,
     locale,
     credentialReveal,
     merchant,

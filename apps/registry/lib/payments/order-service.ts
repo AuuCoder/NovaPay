@@ -2,12 +2,10 @@
  * Order lifecycle service for paid plugins (Req 13.1, 13.2).
  *
  * Coordinates Order creation, NovaPay payment order kickoff, callback
- * handling, and License issuance. Phase 3 keeps the persistence in memory;
- * production replaces the store with Prisma.
+ * handling, and License issuance. Production uses the Prisma-backed store;
+ * the in-memory variant is kept for unit tests.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LicenseClaims } from "../licensing/issuer";
 import { issueLicense } from "../licensing/issuer";
@@ -66,33 +64,6 @@ export interface OrderStore {
   listAll(): Promise<OrderRecord[]>;
 }
 
-interface PersistedOrderRecord extends Omit<OrderRecord, "createdAt" | "updatedAt" | "paidAt" | "failedAt"> {
-  createdAt: string;
-  updatedAt: string;
-  paidAt?: string | null;
-  failedAt?: string | null;
-}
-
-function toPersisted(record: OrderRecord): PersistedOrderRecord {
-  return {
-    ...record,
-    createdAt: record.createdAt.toISOString(),
-    updatedAt: record.updatedAt.toISOString(),
-    paidAt: record.paidAt?.toISOString() ?? null,
-    failedAt: record.failedAt?.toISOString() ?? null,
-  };
-}
-
-function fromPersisted(record: PersistedOrderRecord): OrderRecord {
-  return {
-    ...record,
-    createdAt: new Date(record.createdAt),
-    updatedAt: new Date(record.updatedAt),
-    paidAt: record.paidAt ? new Date(record.paidAt) : null,
-    failedAt: record.failedAt ? new Date(record.failedAt) : null,
-  };
-}
-
 export function createInMemoryOrderStore(): OrderStore {
   const orders = new Map<string, OrderRecord>();
   const byNumber = new Map<string, string>();
@@ -132,67 +103,127 @@ export function createInMemoryOrderStore(): OrderStore {
   };
 }
 
-export function createPersistentOrderStore(filePath: string): OrderStore {
-  function load() {
-    if (!existsSync(filePath)) {
-      return [] as PersistedOrderRecord[];
-    }
+interface PrismaOrderLike {
+  order: {
+    create(args: unknown): Promise<unknown>;
+    findUnique(args: unknown): Promise<unknown>;
+    findFirst(args: unknown): Promise<unknown>;
+    findMany(args: unknown): Promise<unknown[]>;
+    update(args: unknown): Promise<unknown>;
+  };
+}
 
-    try {
-      return JSON.parse(readFileSync(filePath, "utf8")) as PersistedOrderRecord[];
-    } catch {
-      return [] as PersistedOrderRecord[];
-    }
-  }
+interface OrderRow {
+  id: string;
+  orderNumber: string;
+  pluginSlug: string;
+  pluginId: string;
+  developerId: string;
+  version: string;
+  buyerInstanceId: string | null;
+  buyerMerchantId: string | null;
+  pricingPlanKind: OrderRecord["pricingPlanKind"];
+  priceAmountCents: number;
+  priceCurrency: string;
+  state: OrderState;
+  novapayOrderId: string | null;
+  checkoutUrl: string | null;
+  paidAt: Date | null;
+  failedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  licenseId: string | null;
+}
 
-  function save(records: OrderRecord[]) {
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, JSON.stringify(records.map(toPersisted), null, 2), "utf8");
-  }
+function fromOrderRow(row: OrderRow): OrderRecord {
+  return {
+    id: row.id,
+    orderNumber: row.orderNumber,
+    pluginSlug: row.pluginSlug,
+    pluginId: row.pluginId,
+    developerId: row.developerId,
+    version: row.version,
+    buyerInstanceId: row.buyerInstanceId ?? "",
+    buyerMerchantId: row.buyerMerchantId,
+    pricingPlanKind: row.pricingPlanKind,
+    priceAmountCents: row.priceAmountCents,
+    priceCurrency: row.priceCurrency,
+    state: row.state,
+    novapayOrderId: row.novapayOrderId,
+    checkoutUrl: row.checkoutUrl,
+    paidAt: row.paidAt,
+    failedAt: row.failedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    licenseId: row.licenseId,
+  };
+}
 
-  const records = load().map(fromPersisted);
-  const byId = new Map(records.map((record) => [record.id, record]));
-  const byNumber = new Map(records.map((record) => [record.orderNumber, record.id]));
-
-  function ordered() {
-    return [...byId.values()].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
-  }
-
+export function createPrismaOrderStore(prisma: PrismaOrderLike): OrderStore {
   return {
     async create(record) {
-      byId.set(record.id, { ...record });
-      byNumber.set(record.orderNumber, record.id);
-      save(ordered());
-      return { ...record };
+      const row = (await prisma.order.create({
+        data: {
+          id: record.id,
+          orderNumber: record.orderNumber,
+          pluginId: record.pluginId,
+          pluginSlug: record.pluginSlug,
+          developerId: record.developerId,
+          version: record.version,
+          buyerInstanceId: record.buyerInstanceId,
+          buyerMerchantId: record.buyerMerchantId ?? null,
+          pricingPlanKind: record.pricingPlanKind,
+          priceAmountCents: record.priceAmountCents,
+          priceCurrency: record.priceCurrency,
+          state: record.state,
+          novapayOrderId: record.novapayOrderId ?? null,
+          checkoutUrl: record.checkoutUrl ?? null,
+          paidAt: record.paidAt ?? null,
+          failedAt: record.failedAt ?? null,
+          licenseId: record.licenseId ?? null,
+          createdAt: record.createdAt,
+        },
+      })) as OrderRow;
+      return fromOrderRow(row);
     },
     async findById(orderId) {
-      const record = byId.get(orderId);
-      return record ? { ...record } : null;
+      const row = (await prisma.order.findUnique({ where: { id: orderId } })) as OrderRow | null;
+      return row ? fromOrderRow(row) : null;
     },
     async findByOrderNumber(orderNumber) {
-      const id = byNumber.get(orderNumber);
-      if (!id) return null;
-      const record = byId.get(id);
-      return record ? { ...record } : null;
+      const row = (await prisma.order.findUnique({
+        where: { orderNumber },
+      })) as OrderRow | null;
+      return row ? fromOrderRow(row) : null;
     },
     async update(orderId, patch) {
-      const existing = byId.get(orderId);
-      if (!existing) {
-        throw new Error(`Order not found: ${orderId}`);
-      }
+      const data: Record<string, unknown> = {};
+      if (patch.state !== undefined) data.state = patch.state;
+      if (patch.novapayOrderId !== undefined) data.novapayOrderId = patch.novapayOrderId;
+      if (patch.checkoutUrl !== undefined) data.checkoutUrl = patch.checkoutUrl;
+      if (patch.paidAt !== undefined) data.paidAt = patch.paidAt;
+      if (patch.failedAt !== undefined) data.failedAt = patch.failedAt;
+      if (patch.licenseId !== undefined) data.licenseId = patch.licenseId;
+      if (patch.buyerMerchantId !== undefined) data.buyerMerchantId = patch.buyerMerchantId;
 
-      const merged = { ...existing, ...patch, updatedAt: new Date() };
-      byId.set(orderId, merged);
-      save(ordered());
-      return { ...merged };
+      const row = (await prisma.order.update({
+        where: { id: orderId },
+        data,
+      })) as OrderRow;
+      return fromOrderRow(row);
     },
     async listByDeveloper(developerId) {
-      return ordered()
-        .filter((order) => order.developerId === developerId)
-        .map((order) => ({ ...order }));
+      const rows = (await prisma.order.findMany({
+        where: { developerId },
+        orderBy: { createdAt: "desc" },
+      })) as OrderRow[];
+      return rows.map(fromOrderRow);
     },
     async listAll() {
-      return ordered().map((order) => ({ ...order }));
+      const rows = (await prisma.order.findMany({
+        orderBy: { createdAt: "desc" },
+      })) as OrderRow[];
+      return rows.map(fromOrderRow);
     },
   };
 }
