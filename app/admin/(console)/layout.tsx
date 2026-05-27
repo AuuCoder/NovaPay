@@ -44,6 +44,7 @@ export default async function AdminConsoleLayout({
           intro:
             "Operations workspace for a multi-merchant payment gateway, covering merchant approval, transactions, callbacks, merchant-owned routing, and audit visibility.",
           docs: "API Docs",
+          governance: "Plugin Governance",
           logout: "Sign Out",
         }
       : {
@@ -72,6 +73,7 @@ export default async function AdminConsoleLayout({
           title: "企业运营后台",
           intro: "面向多商户支付网关的运营后台，覆盖商户审核、订单、回调、商户自有通道路由与审计日志。",
           docs: "API 文档",
+          governance: "插件治理",
           logout: "退出登录",
         };
   const navItems: AdminNavItem[] = [
@@ -198,6 +200,15 @@ export default async function AdminConsoleLayout({
             >
               {content.docs}
             </Link>
+            {hasPermission(role, "plugin_marketplace:read") ? (
+              <Link
+                href="/api/internal/registry-sso/start"
+                prefetch={false}
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white"
+              >
+                {content.governance}
+              </Link>
+            ) : null}
             <form action={logoutAdminAction}>
               <button
                 type="submit"

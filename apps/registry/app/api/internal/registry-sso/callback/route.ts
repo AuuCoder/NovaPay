@@ -12,15 +12,29 @@ function withMessage(path: string, key: "error" | "success", message: string) {
   return `${url.pathname}?${url.searchParams.toString()}`;
 }
 
+function getRegistryRedirectBase(request: Request): string {
+  const configured = process.env.REGISTRY_APP_URL?.trim();
+  if (configured) return configured;
+
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  if (forwardedHost) {
+    return `${forwardedProto ?? "https"}://${forwardedHost}`;
+  }
+
+  return request.url;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const token = url.searchParams.get("token");
+  const redirectBase = getRegistryRedirectBase(request);
 
   if (!token) {
     return NextResponse.redirect(
       new URL(
         withMessage("/developer/auth", "error", "sso_token_missing"),
-        request.url,
+        redirectBase,
       ),
     );
   }
@@ -35,7 +49,7 @@ export async function GET(request: Request) {
           "error",
           "sso_token_invalid",
         ),
-        request.url,
+        redirectBase,
       ),
     );
   }
@@ -86,7 +100,7 @@ export async function GET(request: Request) {
   return NextResponse.redirect(
     new URL(
       withMessage("/developer/plugins", "success", "sso_connected"),
-      request.url,
+      redirectBase,
     ),
   );
 }
