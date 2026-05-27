@@ -1,51 +1,51 @@
+[简体中文](./production-runbook.zh-CN.md)
+
 # Production Runbook
 
-NovaPay 单台服务器的标准上线流程。整套系统包括：
+Standard launch flow for NovaPay on a single server. The full stack consists of:
 
-- 主站（NovaPay 网关 + 后台 + 托管收银台）
-- 插件市场（Registry，独立 Next.js 服务）
-- 三个后台 worker：callbacks / finance / onchain
-- Postgres 16（两个数据库：`novapay`、`novapay_registry`）
-- MinIO（S3 兼容对象存储，存插件包）
+- Main app (NovaPay gateway + admin console + hosted checkout)
+- Plugin Registry (independent Next.js service)
+- Three background workers: callbacks / finance / onchain
+- PostgreSQL 16 (two databases: `novapay`, `novapay_registry`)
+- MinIO (S3-compatible object storage for plugin bundles)
 
-推荐部署形态：上述全部跑在 Docker Compose 里，前面接 Nginx / Caddy / Cloudflare 提供 HTTPS。
+Recommended topology: every component runs inside Docker Compose, fronted by Nginx / Caddy / Cloudflare for HTTPS.
 
 ---
 
-## 1. 服务器准备
+## 1. Server prerequisites
 
-最低配置：
+Minimum specs:
 
-- 4 核 / 4 GB RAM / 40 GB SSD
-- Ubuntu 22.04 / Debian 12 / Rocky 9 等主流发行版
-- 公网 IP + 至少两个域名（主站、插件市场）
+- 4 vCPU / 4 GB RAM / 40 GB SSD
+- Ubuntu 22.04 / Debian 12 / Rocky 9 or another mainstream distro
+- A public IP and at least two domains (main app, plugin registry)
 
-软件：
+Software:
 
 ```bash
-# 安装 Docker Engine + Docker Compose v2
+# Install Docker Engine + Compose v2
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER
-# 重新登录后生效
+# Re-login to take effect
 
-docker --version            # 应显示 24+ 或 27+
-docker compose version      # 应显示 v2.x
+docker --version            # 24+ or 27+
+docker compose version      # v2.x
 ```
 
-如果 `docker compose version` 输出包含 `Emulate Docker CLI using podman` 或 `external compose provider`，说明跑的是 podman 兼容层或旧版 v1，先切回官方 Docker。
+If `docker compose version` says `Emulate Docker CLI using podman` or `external compose provider`, you're on a podman shim or Compose v1 — switch to the official Docker Engine first.
 
 ---
 
-## 2. 域名与 HTTPS
+## 2. Domains and HTTPS
 
-至少准备两个子域名：
+Prepare two subdomains:
 
-- `pay.example.com` → 主站
-- `registry.example.com` → 插件市场
+- `pay.example.com` → main app
+- `registry.example.com` → plugin registry
 
-DNS A 记录都指向这台服务器。HTTPS 由前置代理负责（推荐 Caddy，自动签 Let's Encrypt 证书）。
-
-最小 Caddyfile 示例：
+Both A-records point to this server. HTTPS is handled by the front proxy. Caddy is the simplest (auto Let's Encrypt):
 
 ```caddyfile
 pay.example.com {
@@ -61,7 +61,7 @@ registry.example.com {
 }
 ```
 
-如果用 Nginx，`location /` 里需要：
+For Nginx, the `location /` block must include:
 
 ```nginx
 proxy_set_header Host $host;
@@ -71,11 +71,11 @@ proxy_set_header X-Forwarded-Proto $scheme;
 proxy_pass http://127.0.0.1:3000;
 ```
 
-商户 API 支持 IP 白名单，反向代理必须正确透传 `x-forwarded-for`，否则启用了白名单的商户会被误拦截。
+The merchant API uses IP allowlists; the reverse proxy must forward `x-forwarded-for` correctly, otherwise allowlisted merchants get rejected.
 
 ---
 
-## 3. 拉代码 + 配置 `.env`
+## 3. Clone code and configure `.env`
 
 ```bash
 git clone https://github.com/AuuCoder/NovaPay.git
@@ -84,18 +84,18 @@ cp .env.docker-compose.example .env
 vim .env
 ```
 
-至少修改以下变量：
+Replace at least these values:
 
 ```bash
 # Postgres
 POSTGRES_USER="novapay"
-POSTGRES_PASSWORD="生成强随机"      # openssl rand -hex 24
-DATABASE_URL="postgresql://novapay:<上面的密码>@postgres:5432/novapay?schema=public"
-REGISTRY_DATABASE_URL="postgresql://novapay:<上面的密码>@postgres:5432/novapay_registry?schema=public"
+POSTGRES_PASSWORD="<random>"        # openssl rand -hex 24
+DATABASE_URL="postgresql://novapay:<password>@postgres:5432/novapay?schema=public"
+REGISTRY_DATABASE_URL="postgresql://novapay:<password>@postgres:5432/novapay_registry?schema=public"
 
 # MinIO
-MINIO_ACCESS_KEY="生成强随机"        # openssl rand -hex 12
-MINIO_SECRET_KEY="生成强随机"        # openssl rand -hex 24
+MINIO_ACCESS_KEY="<random>"          # openssl rand -hex 12
+MINIO_SECRET_KEY="<random>"          # openssl rand -hex 24
 S3_ACCESS_KEY_ID="${MINIO_ACCESS_KEY}"
 S3_SECRET_ACCESS_KEY="${MINIO_SECRET_KEY}"
 S3_BUCKET="novapay-registry-packages"
@@ -103,201 +103,201 @@ S3_ENDPOINT_URL="http://minio:9000"
 S3_REGION="us-east-1"
 S3_FORCE_PATH_STYLE="true"
 
-# 公网域名
+# Public URLs
 NOVAPAY_PUBLIC_BASE_URL="https://pay.example.com"
 REGISTRY_APP_URL="https://registry.example.com"
 
-# 加密密钥
-NOVAPAY_DATA_ENCRYPTION_KEY="生成 32 字节 base64"   # openssl rand -base64 32
-REGISTRY_DEFAULT_APP_KEY="生成强随机"               # openssl rand -hex 32
-REGISTRY_SSO_SECRET="生成强随机"                    # openssl rand -hex 32
+# Cryptographic keys
+NOVAPAY_DATA_ENCRYPTION_KEY="<base64 32 bytes>"      # openssl rand -base64 32
+REGISTRY_DEFAULT_APP_KEY="<random>"                  # openssl rand -hex 32
+REGISTRY_SSO_SECRET="<random>"                       # openssl rand -hex 32
 
-# 引导管理员
+# Bootstrap admin
 ADMIN_BOOTSTRAP_ENABLED="1"
 ADMIN_BOOTSTRAP_EMAIL="admin@example.com"
-ADMIN_BOOTSTRAP_PASSWORD="生成强随机"
+ADMIN_BOOTSTRAP_PASSWORD="<random>"
 ADMIN_BOOTSTRAP_NAME="Platform Administrator"
 ```
 
-注意：
+Notes:
 
-- `NOVAPAY_PUBLIC_BASE_URL` 必须是公开 HTTPS 域名，绝不能是 `localhost`
-- 支付宝和微信支付参数不再由平台环境变量统一提供，而是由商户在控制台各自维护
-- USDT 通道的收款地址也不写在平台 `.env`，而是由每个商户在自己的通道实例里配置
-- 上线前务必修改所有 `REPLACE_WITH_*` 的占位密钥，否则生产会拒启动
-- `ADMIN_BOOTSTRAP_ENABLED` 在第一次拉起 admin 后建议改成 `0`，避免每次重启都覆盖管理员密码
+- `NOVAPAY_PUBLIC_BASE_URL` must be a public HTTPS domain — never `localhost`.
+- Alipay and WeChat Pay credentials no longer come from platform env vars; merchants manage them in the merchant console.
+- USDT receiving addresses also live per-merchant in the channel instance, not in `.env`.
+- Replace every `REPLACE_WITH_*` placeholder before launching, otherwise the production guard refuses to start.
+- After the first admin login succeeds, set `ADMIN_BOOTSTRAP_ENABLED="0"` so subsequent restarts don't reset the admin password.
 
 ---
 
-## 4. 数据库 + 对象存储初始化
+## 4. Database + object storage initialization
 
 ```bash
-# 4.1 创建 novapay_registry 数据库（postgres 容器内执行 createdb）
+# 4.1 Create the novapay_registry database (executed inside the postgres container)
 docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm postgres-init
 
-# 4.2 主站 Prisma 迁移
+# 4.2 Main-app Prisma migrations
 docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm migrate
 
-# 4.3 插件市场 Prisma 迁移
+# 4.3 Registry Prisma migrations
 docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm migrate-registry
 
-# 4.4 生产前置检查（数据库可达 / 关键 env / USDT 通道地址唯一性）
+# 4.4 Production preflight (DB reachable, critical envs set, USDT address uniqueness)
 docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm preflight
 ```
 
-四步全绿后再 `up -d`。
+All four steps must succeed before `up -d`.
 
-USDT 通道额外检查：
+Extra checks for USDT channels:
 
-- 对应链的 RPC / Token / Mint 是否配置好
-- 是否存在重复的链上收款地址
-- 是否需要启动 `onchain-worker`
+- Per-chain RPC / token / mint configured
+- No duplicate on-chain receiving addresses
+- `onchain-worker` is in the live process set
 
 ---
 
-## 5. 启动应用栈
+## 5. Launch the application stack
 
 ```bash
 docker compose -f deploy/docker-compose.prod.yml up -d
 ```
 
-应该看到 9 个容器都 `Up (healthy)`：
+Expect 9 containers in `Up (healthy)`:
 
-| 容器 | 端口 | 用途 |
+| Container | Port | Role |
 |---|---|---|
-| `postgres` | 5432（仅容器网络） | 共享数据库 |
-| `minio` | 9001（127.0.0.1） | 对象存储管理控制台 |
-| `web` | 3000 | 主站 |
-| `registry` | 3100 | 插件市场 |
-| `callbacks-worker` | — | 商户业务回调重试 |
-| `finance-worker` | — | 财务流水同步 |
-| `onchain-worker` | — | USDT 链上扫描 |
-| `minio-init` | — | 一次性 bucket 创建 |
-| 反向代理（Caddy/Nginx） | 80/443 | HTTPS 入口 |
+| `postgres` | 5432 (compose network only) | Shared database |
+| `minio` | 9001 (127.0.0.1) | Object storage admin console |
+| `web` | 3000 | Main app |
+| `registry` | 3100 | Plugin registry |
+| `callbacks-worker` | — | Merchant callback retries |
+| `finance-worker` | — | Finance ledger sync |
+| `onchain-worker` | — | USDT chain scanning |
+| `minio-init` | — | One-shot bucket bootstrap |
+| Reverse proxy (Caddy/Nginx) | 80/443 | HTTPS gateway |
 
-主站和插件市场的 `:3000` / `:3100` 端口都已绑到本机，反向代理转发即可。MinIO S3 API 端口 `:9000` 默认不对外暴露——只有反向代理可以代理它，或者通过 SSH 隧道访问 `:9001` 控制台。
-
----
-
-## 6. 上线后核对
-
-按顺序逐项检查：
-
-1. `curl https://pay.example.com/api/health` 返回 200 且 `database: ok`
-2. `curl https://registry.example.com/api/.well-known/trust.json` 返回 200，里头有当前 ACTIVE 的 Ed25519 公钥
-3. 浏览器打开 `https://pay.example.com/admin/login`，能用 `ADMIN_BOOTSTRAP_*` 登录
-4. 浏览器打开 `https://pay.example.com/docs`，OpenAPI 文档页可访问
-5. 商户能注册、被审核通过、登录成功
-6. 三个 worker 都在 `docker compose ps` 输出里且 `Up`
-7. 在 admin 后台 `/admin/plugins` 看到 5 个内置插件，状态为「已安装 / 已启用」
+Both `:3000` and `:3100` are bound to the local host; the reverse proxy forwards public traffic. The MinIO S3 API at `:9000` stays internal — proxy it explicitly if you need public bundle downloads, otherwise tunnel `:9001` over SSH for the admin console.
 
 ---
 
-## 7. USDT 上线专项检查
+## 6. Post-launch verification
 
-如果本次还要一起上线链上 USDT：
+Walk through these checks in order:
 
-### 7.1 商户配置检查
+1. `curl https://pay.example.com/api/health` returns 200 with `database: ok`
+2. `curl https://registry.example.com/api/.well-known/trust.json` returns 200 with the active Ed25519 public key
+3. `https://pay.example.com/admin/login` accepts the bootstrap admin credentials
+4. `https://pay.example.com/docs` renders the OpenAPI page
+5. A merchant can register, get approved, and sign in
+6. All three workers show `Up` in `docker compose ps`
+7. `/admin/plugins` lists 5 built-in plugins as installed + enabled
 
-1. 商户已经在控制台创建并启用了 `usdt.bsc`、`usdt.base` 或 `usdt.sol` 通道实例
-2. 每个通道实例都填写了正确的收款地址
-3. 同一条链上，不同商户没有复用同一个收款地址
-4. `merchantChannelBinding` 已指向对应商户实例
+---
 
-### 7.2 平台系统配置
+## 7. USDT-specific checks
 
-按启用的链补齐系统配置（`/admin/system-config` 页面或直接 `SystemConfig` 表）：
+If this launch also enables on-chain USDT, run through this section.
 
-- BSC：`USDT_BSC_RPC_URL`、`USDT_BSC_TOKEN_CONTRACT`
-- Base：`USDT_BASE_RPC_URL`、`USDT_BASE_TOKEN_CONTRACT`
-- Solana：`USDT_SOL_RPC_URL`、`USDT_SOL_MINT`
+### 7.1 Merchant configuration
 
-可选调优：
+1. The merchant has created and enabled a `usdt.bsc` / `usdt.base` / `usdt.sol` channel instance
+2. Each instance has a real receiving address
+3. No two merchants share the same receiving address on the same chain
+4. `MerchantChannelBinding` points to the right instance
+
+### 7.2 System config
+
+Fill in (via `/admin/system-config` or the `SystemConfig` table) for every enabled chain:
+
+- BSC: `USDT_BSC_RPC_URL`, `USDT_BSC_TOKEN_CONTRACT`
+- Base: `USDT_BASE_RPC_URL`, `USDT_BASE_TOKEN_CONTRACT`
+- Solana: `USDT_SOL_RPC_URL`, `USDT_SOL_MINT`
+
+Optional tuning:
 
 - `USDT_BSC_CONFIRMATIONS` / `USDT_BASE_CONFIRMATIONS` / `USDT_SOL_CONFIRMATIONS`
 - `USDT_TAIL_STEP` / `USDT_TAIL_MAX` / `USDT_TAIL_RELATIVE_MAX_BPS`
 
-默认策略：
+Defaults:
 
-- 汇率主源：`CoinGecko`
-- 汇率备用：`CoinPaprika`
-- 双源失败：固定 `7.2`
-- 尾差步长：`0.0001 USDT`
-- 尾差上限：`0.0099 USDT`
-- 相对尾差上限：`0.3%`
+- Primary rate source: CoinGecko
+- Secondary: CoinPaprika
+- Both fail → fixed rate `7.2`
+- Tail step: `0.0001 USDT`
+- Tail cap: `0.0099 USDT`
+- Relative tail cap: `0.3%`
 
-### 7.3 首次实单建议
+### 7.3 First real-money test
 
-先只放开一条链做验证，例如先测 `usdt.bsc`：
+Bring up one chain at a time. For example with `usdt.bsc`:
 
-1. 商户后台启用 `usdt.bsc`
-2. 调用 `POST /api/payment-orders` 创建一笔小额订单
-3. 确认返回里有：`hostedCheckoutUrl`、`payableAmount`、`payableCurrency`、`quoteRate`、`quoteExpiresAt`
-4. 打开托管支付页确认地址、链路、精确金额都正确
-5. 钱包按精确金额转入
-6. 查看 `onchain-worker` 日志，确认检测到入账并配单
-7. 订单状态变成 `SUCCEEDED`
-8. 商户业务回调送达
+1. Enable `usdt.bsc` in the merchant console
+2. `POST /api/payment-orders` with a small amount
+3. Verify the response carries `hostedCheckoutUrl`, `payableAmount`, `payableCurrency`, `quoteRate`, `quoteExpiresAt`
+4. Open the hosted checkout page and check the address, network label, and exact amount
+5. From a real wallet, transfer the exact amount
+6. `docker compose logs -f onchain-worker` shows the deposit detected and matched
+7. The order transitions to `SUCCEEDED`
+8. The merchant business callback fires
 
-### 7.4 异常处理
+### 7.4 Failure modes
 
-- 同金额订单太多 → 系统通过尾差分配精确应付，槽用尽时拒绝下单
-- 链上到账金额与页面金额不完全一致 → 不会自动确认，避免误配
-- 多商户错误地配置了同链同地址 → 预检失败，worker 跳过该地址
-- 链 RPC 故障 → `onchain-worker` 记录错误但不影响其他 worker
-
----
-
-## 8. 财务运营
-
-财务页提供：
-
-- 对账日报
-- 资金流水
-- 结算单
-- 余额快照
-
-推荐流程：
-
-1. `finance-worker` 定时补齐支付、手续费、退款分录
-2. 自动生成商户结算单和余额快照
-3. 财务在后台确认结算单后手动「标记已打款」
-
-标记已打款时系统会写一条 `SETTLEMENT_PAYOUT` 资金流水并重新计算余额快照。
+- Many concurrent same-amount orders → tail allocation gives unique payable amounts; if the tail slots run out, new orders are rejected
+- On-chain amount doesn't match the quoted amount → the worker leaves the order untouched (no auto-confirm)
+- Two merchants accidentally share an address → preflight fails; the worker also skips that address
+- RPC outage → the worker logs errors but other workers stay up
 
 ---
 
-## 9. 备份与恢复
+## 8. Finance ops
 
-### 9.1 自动备份
+The finance page provides:
 
-`pg_dump` 和 MinIO 数据卷必须定期备份。最小脚本（放 cron）：
+- Reconciliation reports
+- Cash flow ledger
+- Settlements
+- Balance snapshots
+
+Recommended workflow:
+
+1. `finance-worker` continuously fills in payment / fee / refund entries
+2. Settlement statements and balance snapshots regenerate automatically
+3. The finance team reviews settlements and clicks **Mark as Paid** in the admin console
+
+That action writes a `SETTLEMENT_PAYOUT` ledger entry and recomputes the balance snapshot.
+
+---
+
+## 9. Backup and restore
+
+### 9.1 Automated backup
+
+`pg_dump` and the MinIO data volume must be backed up regularly. Minimal cron script:
 
 ```bash
 #!/bin/bash
-# backup.sh — 每天凌晨 3 点跑
+# backup.sh — daily at 3 AM
 set -euo pipefail
 DATE="$(date +%Y%m%d)"
 BACKUP_DIR="/backup/novapay/$DATE"
 mkdir -p "$BACKUP_DIR"
 
-# 数据库
+# Databases
 docker compose -f /opt/novapay/deploy/docker-compose.prod.yml exec -T postgres \
   pg_dump -U novapay novapay | gzip > "$BACKUP_DIR/novapay.sql.gz"
 docker compose -f /opt/novapay/deploy/docker-compose.prod.yml exec -T postgres \
   pg_dump -U novapay novapay_registry | gzip > "$BACKUP_DIR/novapay_registry.sql.gz"
 
-# MinIO（增量同步到外部存储）
+# MinIO (incremental sync into the backup tree)
 docker compose -f /opt/novapay/deploy/docker-compose.prod.yml exec -T minio \
   mc mirror --overwrite local/novapay-registry-packages "$BACKUP_DIR/minio/"
 
-# 保留 30 天
+# Keep 30 days
 find /backup/novapay -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
 ```
 
-更稳的做法：把 `/backup/novapay` 同步到云存储（阿里云 OSS / Backblaze B2 / S3 Glacier），或者直接配置 Postgres 流复制。
+For real durability, sync `/backup/novapay` to off-host storage (S3 Glacier, Aliyun OSS, Backblaze B2) or use Postgres streaming replication.
 
-### 9.2 恢复
+### 9.2 Restore
 
 ```bash
 # Postgres
@@ -308,42 +308,42 @@ gunzip < novapay_registry.sql.gz | docker compose exec -T postgres psql -U novap
 docker compose exec -T minio mc mirror --overwrite /backup/minio/ local/novapay-registry-packages
 ```
 
-恢复后跑一次 `preflight` 确认数据库一致，然后再 `up -d`。
+After a restore, run `preflight` once before `up -d`.
 
 ---
 
-## 10. 升级流程
+## 10. Upgrade flow
 
 ```bash
 cd /opt/novapay
 git pull
 
-# 重新拉镜像 + 重新构建
+# Rebuild images
 docker compose -f deploy/docker-compose.prod.yml build --pull
 
-# 跑迁移（如果有新的）
+# Apply pending migrations (if any)
 docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm migrate
 docker compose -f deploy/docker-compose.prod.yml --profile ops run --rm migrate-registry
 
-# 滚动重启
+# Rolling restart
 docker compose -f deploy/docker-compose.prod.yml up -d
 ```
 
-升级前建议先备份一份数据库，遇到 schema 变更回滚困难。
+Always back up the databases before applying schema changes — rollbacks are painful.
 
 ---
 
-## 11. 监控与日志
+## 11. Monitoring and logs
 
-最小必要监控：
+Bare minimum monitoring:
 
-- `/api/health` 每分钟 ping 一次
-- `/api/.well-known/trust.json` 每分钟 ping 一次
-- 三个 worker 进程是否在 `docker compose ps` 中保持 `Up`
-- Postgres 容器是否 healthy
-- 磁盘使用率（数据库 + MinIO 数据卷 + 日志）
+- `/api/health` ping every minute
+- `/api/.well-known/trust.json` ping every minute
+- All three workers stay `Up` in `docker compose ps`
+- Postgres container reports healthy
+- Disk usage on database and MinIO data volumes
 
-容器日志查看：
+Log tailing:
 
 ```bash
 docker compose -f deploy/docker-compose.prod.yml logs -f web
@@ -351,47 +351,47 @@ docker compose -f deploy/docker-compose.prod.yml logs -f registry
 docker compose -f deploy/docker-compose.prod.yml logs -f callbacks-worker
 ```
 
-如果接 ELK / Loki，建议用 docker logging driver 直接转发，避免 `docker logs` 文件膨胀。
+For ELK / Loki, configure the Docker logging driver to forward directly instead of relying on `docker logs` files growing unboundedly.
 
 ---
 
-## 12. 安全检查清单
+## 12. Security checklist
 
-上线前过一遍：
+Walk through this before going live:
 
-- [ ] `.env` 里所有 `REPLACE_WITH_*` 都已替换
-- [ ] `NOVAPAY_DATA_ENCRYPTION_KEY` 是 32 字节随机值，不是开发默认
-- [ ] `REGISTRY_DEFAULT_APP_KEY` / `REGISTRY_SSO_SECRET` 是随机值，不是开发默认
-- [ ] HTTPS 已配置，反向代理透传 `X-Forwarded-For`
-- [ ] Postgres / MinIO 端口未对公网暴露
-- [ ] 防火墙只放行 80 / 443 / SSH
-- [ ] `ADMIN_BOOTSTRAP_ENABLED` 在首次部署后改为 `0`
-- [ ] `pg_dump` cron 已配置且至少跑过一次成功
-- [ ] 商户的支付凭证全部由商户在后台填写，没有任何 `ALIPAY_*` / `WXPAY_*` 在 `.env` 里
-- [ ] 已运行 `npm run env:check:prod`（在容器内：`docker compose --profile ops run --rm preflight`）
+- [ ] Every `REPLACE_WITH_*` placeholder in `.env` has been replaced
+- [ ] `NOVAPAY_DATA_ENCRYPTION_KEY` is a fresh 32-byte random value (not the dev default)
+- [ ] `REGISTRY_DEFAULT_APP_KEY` and `REGISTRY_SSO_SECRET` are random (not dev defaults)
+- [ ] HTTPS is in place; the proxy forwards `X-Forwarded-For`
+- [ ] Postgres / MinIO ports are not publicly exposed
+- [ ] Firewall only opens 80 / 443 / SSH
+- [ ] `ADMIN_BOOTSTRAP_ENABLED` set to `0` after first login
+- [ ] `pg_dump` cron is set up and at least one backup has succeeded
+- [ ] No `ALIPAY_*` / `WXPAY_*` credentials in `.env` — every merchant manages their own in the console
+- [ ] `npm run env:check:prod` (or the `preflight` compose service) returns OK
 
 ---
 
-## 13. 故障排查
+## 13. Troubleshooting
 
-| 症状 | 可能原因 | 排查 |
+| Symptom | Possible cause | Where to look |
 |---|---|---|
-| 商户登录后立刻退出 | Cookie 域不匹配 | 检查 `NOVAPAY_PUBLIC_BASE_URL` 是否跟反向代理对外域名一致 |
-| 创建订单 422 PLUGIN_NOT_INSTALLED | 通道插件未安装/未启用 | `/admin/plugins` 检查插件状态 |
-| 支付完没回来 | 上游 returnUrl 不接受当前域名 | 改用真实 HTTPS 域名，不要用 localhost / xx.localtest.me |
-| 回调没到商户 | `callbacks-worker` 未运行或商户回调返回非 2xx | `docker compose logs callbacks-worker` |
-| USDT 不到账 | `onchain-worker` 未运行 / 链 RPC 异常 | `docker compose logs onchain-worker` |
-| 插件下载 403 | MinIO 凭证不对 / bucket 没建 | `mc alias set` + `mc ls local/` 检查 |
-| Registry 启动报「No active signing key」 | 数据库为空或迁移没跑 | 重跑 `migrate-registry`，重启 registry |
+| Merchant logs in then immediately bounces | Cookie domain mismatch | Verify `NOVAPAY_PUBLIC_BASE_URL` matches the proxy's public hostname |
+| Order creation returns 422 PLUGIN_NOT_INSTALLED | Channel plugin not installed/enabled | Check `/admin/plugins` |
+| Browser doesn't return after Alipay payment | Upstream rejects the returnUrl | Use a real HTTPS domain — never `localhost` or `*.localtest.me` |
+| Merchant never receives a callback | Worker not running, or merchant returns non-2xx | `docker compose logs callbacks-worker` |
+| USDT deposits not picked up | Worker not running, or RPC outage | `docker compose logs onchain-worker` |
+| Plugin download 403 | MinIO credentials wrong, bucket missing | `mc alias set` then `mc ls local/` |
+| Registry boot error: "No active signing key" | Empty DB, migrations didn't run | Re-run `migrate-registry`, restart `registry` |
 
 ---
 
-## 14. 不要做的事
+## 14. Things to avoid
 
-- 不要在生产用 `db:push` 或 `db:migrate dev`
-- 不要把 `.env` 提交到 git
-- 不要让 Postgres / MinIO / Worker 容器对公网开放端口
-- 不要在 `.env` 里写商户的支付凭证
-- 不要禁用 `secure` cookie（生产必须有 HTTPS）
-- 不要把 `MinIO root` 凭证当成商户使用的 S3 token（生产应该专门为应用层创建受限的 access key）
-- 不要在多副本部署时让两台机器同时跑 `finance-worker` / `onchain-worker`（会重复扣账或重复匹配）
+- Don't run `db:push` or `db:migrate dev` in production
+- Don't commit `.env` to git
+- Don't expose Postgres / MinIO / worker container ports to the internet
+- Don't put merchant payment credentials in `.env`
+- Don't disable secure cookies (HTTPS is mandatory)
+- Don't share the MinIO `root` credentials with the application — create scoped access keys
+- Don't run `finance-worker` / `onchain-worker` on two replicas simultaneously (double-counts ledger entries and on-chain matches)

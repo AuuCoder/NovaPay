@@ -1,3 +1,5 @@
+[简体中文](./DESIGN.zh-CN.md)
+
 # NovaPay Plugin Registry — Design System
 
 Based on the Wise-inspired design language from [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/wise/DESIGN.md).

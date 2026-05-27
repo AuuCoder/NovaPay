@@ -1,44 +1,46 @@
+[简体中文](./merchant-integration-examples.zh-CN.md)
+
 # Merchant Integration Examples
 
-商户接入 NovaPay 时的核心流程：拿到 API Key / Secret → 在自己服务里生成签名 → 调 `POST /api/payment-orders` → 处理 NovaPay 的业务回调 → 必要时主动查单。
+Core integration flow: receive an API Key / Secret → sign the request body in your service → call `POST /api/payment-orders` → handle NovaPay's business callback → poll the order on demand.
 
-下面给出最小可运行的端到端示例。
+The minimum end-to-end example follows.
 
 ---
 
-## 1. 创建订单签名
+## 1. Order signature
 
-商户创建订单时使用专属 API 凭证生成签名：
+Sign the request with the merchant's API Secret:
 
 ```text
 hex(hmac_sha256(apiSecret, "{timestamp}.{nonce}.{rawBody}"))
 ```
 
-请求体保持单行 JSON 不要含多余空白；timestamp、nonce、rawBody 三段必须和参与签名时完全一致。
+The body must be a single-line JSON without extra whitespace; the same `timestamp`, `nonce`, and `rawBody` you used for signing must be sent verbatim.
 
-示例请求体：
+Sample body:
 
 ```json
 {"merchantCode":"merchant-prod-cn-001","channelCode":"alipay.page","externalOrderId":"ORDER-20260410-001","amount":"88.00","subject":"NovaPay Production Order","description":"Alipay page payment"}
 ```
 
-接口行为说明：
+Behaviour notes:
 
-- 商户不需要也不能传 `notifyUrl`
-- 上游支付机构回调地址由 NovaPay 根据当前商户通道实例自动分配
-- 不要在平台 `.env` 中填写 `ALIPAY_*` / `WXPAY_*` 商户支付参数，改为在商户控制台的通道实例里维护
-- 商户业务回调地址建议配置在「默认业务回调」上；单笔订单需要覆盖时传 `callbackUrl`
-- `returnUrl` 只用于浏览器跳回；不传时使用 NovaPay 的托管结果页
-- 最终结果以 NovaPay 的业务回调或主动查单为准，不要只看浏览器跳回
+- Merchants do not need to and must not send `notifyUrl`
+- Upstream callback URLs are auto-generated per channel instance
+- Do not put `ALIPAY_*` / `WXPAY_*` credentials into the platform `.env` — manage them inside the merchant channel instance
+- Configure the merchant business callback in the profile under "Default callback URL"; per-order overrides go in `callbackUrl`
+- `returnUrl` only controls the browser bounce; if omitted, NovaPay's hosted return page is used
+- The authoritative source of truth is the NovaPay business callback or active polling — never the browser bounce alone
 
-完整示例命令：
+Full example:
 
 ```bash
 RAW_BODY='{"merchantCode":"merchant-prod-cn-001","channelCode":"alipay.page","externalOrderId":"ORDER-20260410-001","amount":"88.00","subject":"NovaPay Production Order","description":"Alipay page payment"}'
 TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 NONCE="order_$(date +%s)_$(openssl rand -hex 4)"
-API_KEY="你的商户API Key"
-API_SECRET="你的商户API Secret"
+API_KEY="your_merchant_api_key"
+API_SECRET="your_merchant_api_secret"
 IDEMPOTENCY_KEY="order_20260410_001"
 SIGNATURE="$(node -e 'const crypto=require("node:crypto"); const [timestamp, nonce, body, secret] = process.argv.slice(1); process.stdout.write(crypto.createHmac("sha256", secret).update(`${timestamp}.${nonce}.${body}`).digest("hex"));' "$TIMESTAMP" "$NONCE" "$RAW_BODY" "$API_SECRET")"
 
@@ -52,46 +54,46 @@ curl -X POST "https://pay.example.com/api/payment-orders" \
   --data-raw "$RAW_BODY"
 ```
 
-补充说明：
+Notes:
 
-- `x-novapay-nonce` 用于防重放，每次请求都应重新生成
-- `Idempotency-Key` 用于业务安全重试；同一业务重试时应保持不变
-- 本地开发把 URL 换成 `http://localhost:3000`，生产换成商户接入文档里给的真实域名
+- `x-novapay-nonce` is a replay guard; regenerate it for every request
+- `Idempotency-Key` enables safe retries; keep it stable for the same business order
+- Use `http://localhost:3000` for local dev; for production, use the URL provided in your merchant onboarding doc
 
 ---
 
-## 2. 各通道下单要点
+## 2. Channel-specific notes
 
-### 支付宝网页支付（`alipay.page`）
+### Alipay web payment (`alipay.page`)
 
-- 响应里 `paymentMode` 为 `redirect`、`checkoutUrl` 是支付宝收银台地址
-- 用户在支付宝完成支付后会跳回 `returnUrl`（默认是 NovaPay 托管页）
-- 异步通知由支付宝直接发到 `/api/payments/callback/alipay/{accountId}/{token}`，验签后由 NovaPay 转发给商户
+- Response carries `paymentMode: "redirect"` and `checkoutUrl` pointing to the Alipay cashier
+- Browser bounces back to `returnUrl` (defaults to NovaPay's hosted return page)
+- Async notifications hit `/api/payments/callback/alipay/{accountId}/{token}`; NovaPay verifies signatures and forwards to the merchant
 
-商户后台在通道实例里需要填写：
-
-- `appId`
-- `应用私钥`
-- `支付宝公钥`
-
-### 微信 Native 扫码支付（`wxpay.native`）
-
-- 已接入真实微信支付 API v3：参考 [`lib/payments/providers/wxpay-native.ts`](../lib/payments/providers/wxpay-native.ts)
-- 响应里 `paymentMode` 为 `qr_code`、`checkoutUrl` 和 `providerPayload.codeUrl` 都是同一个 `weixin://` 链接
-- 前端拿到 `codeUrl` 后自行渲染二维码给用户扫码
-- 回调入口按通道实例动态生成：`/api/payments/callback/wxpay/{accountId}/{token}`
-
-商户后台在通道实例里需要填写：
+The merchant channel instance must contain:
 
 - `appId`
-- 商户号
-- 商户证书序列号
-- API v3 Key
-- 平台公钥
+- Application private key
+- Alipay public key
 
-### USDT 链上支付（`usdt.bsc` / `usdt.base` / `usdt.sol`）
+### WeChat Pay Native QR (`wxpay.native`)
 
-把 `channelCode` 改成具体链路：
+- Wired against the real WeChat Pay v3 API; see [`lib/payments/providers/wxpay-native.ts`](../lib/payments/providers/wxpay-native.ts)
+- Response: `paymentMode: "qr_code"`, `checkoutUrl` and `providerPayload.codeUrl` are both the same `weixin://` URL
+- The frontend renders that URL as a QR code
+- Callback path: `/api/payments/callback/wxpay/{accountId}/{token}`
+
+The merchant channel instance must contain:
+
+- `appId`
+- Merchant ID
+- Merchant certificate serial number
+- API v3 key
+- Platform public key
+
+### USDT on-chain (`usdt.bsc` / `usdt.base` / `usdt.sol`)
+
+Set `channelCode` to a specific chain:
 
 ```json
 {
@@ -104,70 +106,70 @@ curl -X POST "https://pay.example.com/api/payment-orders" \
 }
 ```
 
-响应除常规字段外重点关注：
+Beyond the standard fields, watch:
 
-- `hostedCheckoutUrl`：NovaPay 托管支付页地址
-- `payableAmount`：本次应付的精确 USDT 金额
-- `payableCurrency`：通常为 `USDT`
-- `quoteRate`：本次锁定的 USDT/CNY 汇率
-- `quoteSource`：汇率来源（CoinGecko / CoinPaprika / 固定回退）
-- `quoteExpiresAt`：报价失效时间
-- `providerPayload.receivingAddress`：本次收款地址
-- `providerPayload.networkLabel`：链路名称
+- `hostedCheckoutUrl` — NovaPay's hosted on-chain checkout page
+- `payableAmount` — the exact USDT amount the buyer must transfer
+- `payableCurrency` — typically `USDT`
+- `quoteRate` — locked USDT/CNY rate
+- `quoteSource` — rate origin (CoinGecko / CoinPaprika / fallback)
+- `quoteExpiresAt` — quote validity
+- `providerPayload.receivingAddress` — the receiving address
+- `providerPayload.networkLabel` — chain label
 
-商户接入注意：
+Integration tips:
 
-1. 页面必须引导用户按「精确金额 + 正确链路」付款
-2. 最终结果以 NovaPay 回调或主动查单为准，不要只看钱包是否广播
-3. 同一商户支持多条 `usdt.*` 时前端可合并为一个「USDT」分组，但下单 `channelCode` 必须是具体链路
-4. 商户的 USDT 收款地址在商户控制台的通道实例里维护，不要在 `.env` 里
-5. 平台必须运行 `onchain-worker`，否则到账无法自动匹配
+1. The frontend must walk the user through the exact-amount + correct-chain flow
+2. Trust NovaPay callbacks or polling, not "wallet broadcasted"
+3. If the merchant supports multiple `usdt.*` chains, the frontend may show a single `USDT` group, but the order must carry the specific `channelCode`
+4. USDT receiving addresses live in the merchant channel instance, not in `.env`
+5. The platform must run `onchain-worker`, otherwise deposits never match
 
 ---
 
-## 3. 验证 NovaPay 业务回调
+## 3. Verifying the NovaPay business callback
 
-NovaPay 回调商户时使用 `notifySecret` 签名：
+NovaPay signs callbacks with `notifySecret`:
 
 ```text
 hex(hmac_sha256(notifySecret, "{timestamp}.{rawBody}"))
 ```
 
-商户服务端校验顺序：
+Verification order on the merchant side:
 
-1. `x-novapay-timestamp` 是否在允许时间窗口（默认 5 分钟，可由 `MERCHANT_SIGNATURE_MAX_AGE_SECONDS` 调整）
-2. `x-novapay-signature` 是否与本地重算结果一致
-3. 验签通过后再信任回调内容
+1. `x-novapay-timestamp` is within the allowed window (default 5 min, tunable via `MERCHANT_SIGNATURE_MAX_AGE_SECONDS`)
+2. `x-novapay-signature` matches the locally recomputed value
+3. Only after both checks succeed should you trust the body
 
-本地验证示例：
+Local verification example:
 
 ```bash
 CALLBACK_BODY='{"event":"payment.order.updated","orderId":"pay_xxx","status":"PAID"}'
 TIMESTAMP="2026-04-10T12:00:00Z"
-NOTIFY_SECRET="你的notifySecret"
-RECEIVED_SIGNATURE="回调请求头里的x-novapay-signature"
+NOTIFY_SECRET="your_notify_secret"
+RECEIVED_SIGNATURE="value of x-novapay-signature header"
 EXPECTED_SIGNATURE="$(node -e 'const crypto=require("node:crypto"); const [timestamp, body, secret] = process.argv.slice(1); process.stdout.write(crypto.createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex"));' "$TIMESTAMP" "$CALLBACK_BODY" "$NOTIFY_SECRET")"
 
 test "$EXPECTED_SIGNATURE" = "$RECEIVED_SIGNATURE" && echo "valid" || echo "invalid"
 ```
 
-回调送达策略：
+Delivery semantics:
 
-- 失败会按指数退避重试，最多 `CALLBACK_MAX_ATTEMPTS` 次（默认 6）
-- 单次超时 `CALLBACK_TIMEOUT_MS`（默认 10s）
-- 重试间隔 `CALLBACK_RETRY_INTERVAL_SECONDS`（默认 60s）
-- 必须运行 `callbacks-worker` 进程才会有重试
+- Failed deliveries retry with exponential backoff up to `CALLBACK_MAX_ATTEMPTS` (default 6)
+- Per-attempt timeout: `CALLBACK_TIMEOUT_MS` (default 10s)
+- Retry interval seed: `CALLBACK_RETRY_INTERVAL_SECONDS` (default 60s)
+- Requires `callbacks-worker` running
 
-商户业务侧应当：
+The merchant should:
 
-- 处理同一笔订单的重复回调（用 `orderId` + `status` 做幂等）
-- 收到 `2xx` 才算消费成功；其他状态码或非 `success` 文本会触发重试
+- De-duplicate by `orderId` + `status` (callbacks may arrive multiple times)
+- Return `2xx` only on successful processing; anything else triggers retries
 
 ---
 
-## 4. 主动查单（强烈建议）
+## 4. Active polling (recommended)
 
-不要只依赖回调。每次需要确认状态时主动查一下：
+Don't rely on callbacks alone. Poll whenever you need to confirm:
 
 ```bash
 curl -X POST "https://pay.example.com/api/payment-orders/ORDER-20260410-001" \
@@ -179,11 +181,11 @@ curl -X POST "https://pay.example.com/api/payment-orders/ORDER-20260410-001" \
   --data-raw '{"merchantCode":"merchant-prod-cn-001"}'
 ```
 
-返回最新状态，包括上游交易号、支付时间、退款记录等。
+Returns the latest state, upstream transaction id, paid-at, and refund history.
 
 ---
 
-## 5. 退款
+## 5. Refunds
 
 ```json
 POST /api/payment-orders/{orderReference}/refunds
@@ -195,15 +197,15 @@ POST /api/payment-orders/{orderReference}/refunds
 }
 ```
 
-注意：
+Notes:
 
-- `amount` 不能超过订单可退余额
-- `refundReference` 必须唯一（同一商户内）
-- 退款回调走的也是同一套业务回调通道，但 `event` 会变成 `payment.refund.updated`
+- `amount` cannot exceed the refundable balance
+- `refundReference` must be unique per merchant
+- Refund callbacks reuse the same business callback channel but with `event: "payment.refund.updated"`
 
 ---
 
-## 6. 完整 SDK 思路（伪代码）
+## 6. SDK shape (pseudo-code)
 
 ```ts
 class NovaPayClient {
@@ -233,20 +235,20 @@ class NovaPayClient {
 }
 ```
 
-可参考：
+References:
 
-- 已有 [Registry → NovaPay client](../apps/registry/lib/payments/novapay-client.ts) 的实现思路
-- OpenAPI 规范：`http://localhost:3000/api/openapi`
+- The Registry's own [NovaPay client](../apps/registry/lib/payments/novapay-client.ts)
+- The OpenAPI spec at `http://localhost:3000/api/openapi`
 
 ---
 
-## 7. 故障排查清单
+## 7. Troubleshooting checklist
 
-- **签名失败**：检查 `timestamp` 是否 ISO 格式、`rawBody` 是否原始字符串（不要重新 stringify）
-- **403 IP 拒绝**：检查商户 IP 白名单 + 反向代理是否透传 `x-forwarded-for`
-- **422 渠道未配置**：商户在控制台没有创建对应 `channelCode` 的通道实例
-- **422 渠道未启用**：通道实例存在但 `enabled=false`，或 binding 被关掉
-- **回调没收到**：`callbacks-worker` 没运行 / 商户回调返回非 2xx / 防火墙拦截
-- **USDT 不到账**：`onchain-worker` 没运行 / 链 RPC 异常 / 用户付款金额不精确
+- **Signature failure** — check that `timestamp` is ISO 8601 and the `rawBody` you signed is byte-for-byte the body you send (don't `JSON.stringify` again)
+- **403 IP rejected** — verify the merchant's IP allowlist; make sure the reverse proxy forwards `x-forwarded-for`
+- **422 channel not configured** — the merchant has not created a channel instance for the requested `channelCode`
+- **422 channel disabled** — the channel exists but is disabled, or its binding is off
+- **Callback never arrives** — `callbacks-worker` not running / merchant returns non-2xx / firewall drops
+- **USDT deposit not credited** — `onchain-worker` not running / RPC outage / amount mismatch (must be exact)
 
-更多排查项见 [`docs/production-runbook.md`](./production-runbook.md)。
+For deeper troubleshooting see [`docs/production-runbook.md`](./production-runbook.md).

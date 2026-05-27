@@ -1,3 +1,5 @@
+[简体中文](./SECURITY.zh-CN.md)
+
 # Security Policy
 
 ## Scope
@@ -33,7 +35,7 @@ If a private reporting channel has not been configured yet, do not ask reporters
 Before the first public push, verify the following:
 
 1. `.env`, `.env.local`, certificate files, key files, database files, dumps, and backup files are ignored by Git.
-2. `.env.example` contains placeholders only and no real secrets.
+2. `.env.example` and `.env.docker-compose.example` contain placeholders only and no real secrets.
 3. Only `prisma/schema.prisma` and migration files are published for database structure. No data exports are included.
 4. README, deployment docs, and sample commands use placeholder values instead of real credentials or internal endpoints.
 5. The Git history does not contain previously committed secrets. If it does, rewrite history and rotate all affected credentials before publishing.
@@ -48,6 +50,8 @@ If any real secret has ever been committed locally or pushed to a remote reposit
 - bootstrap administrator passwords
 - payment channel private keys and certificates
 - merchant API credentials
+- `REGISTRY_DEFAULT_APP_KEY`, `REGISTRY_SSO_SECRET`
+- MinIO / S3 access keys
 
 ## Repository Maintainer Guidance
 
@@ -59,10 +63,12 @@ Recommended first-public-release contents:
 - `scripts/`
 - `tests/`
 - `docs/`
+- `apps/registry/`
+- `deploy/`
 - `.gitignore`
-- `.env.example`
-- `README.md`
-- `SECURITY.md`
+- `.env.example`, `.env.docker-compose.example`
+- `README.md` / `README.zh-CN.md`
+- `SECURITY.md` / `SECURITY.zh-CN.md`
 - package manager and build config files
 
 Recommended exclusions:
@@ -71,5 +77,7 @@ Recommended exclusions:
 - `.next/`
 - `node_modules/`
 - `generated/`
-- local uploads or storage directories
+- `runtime/plugins/` (per-deployment plugin downloads; rebuilt on each install)
+- `apps/registry/.tmp/`, `/.tmp/`
+- `artifacts/`
 - any file containing live merchant or payment-provider secrets

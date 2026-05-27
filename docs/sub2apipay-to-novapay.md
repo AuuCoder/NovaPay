@@ -1,91 +1,91 @@
-# Sub2ApiPay 到 NovaPay 的结构演进（历史记录）
+[简体中文](./sub2apipay-to-novapay.zh-CN.md)
 
-> 这是一份历史文档。NovaPay 早期从一个名为 `sub2apipay` 的项目（一个面向「Sub2API」内部用户充值/订阅的支付脚本）中提炼支付网关骨架而来。本文记录了当时的取舍和迁移决策；如果你只关心当前架构，参考 [README.zh-CN.md](../README.zh-CN.md) 和 [production-runbook.md](./production-runbook.md) 即可。
+# Sub2ApiPay → NovaPay Architecture Evolution (history)
 
----
-
-## 当时的取舍
-
-`sub2apipay` 值得借鉴的：
-
-- 统一的支付 provider 抽象
-- 回调验签后进入统一订单状态机
-- 多实例支付账号配置与负载均衡
-- 支付限额、超时、取消、退款、重试
-- 管理后台在线配置与统计面板
-
-必须剔除的：
-
-- `Sub2API` 用户体系
-- `Sub2API` 余额充值与订阅发放逻辑
-- 依赖 `token -> Sub2API user` 的用户端支付页
-- `Channel / SubscriptionPlan` 这类面向内部渠道与套餐销售的模型
+> Historical record. NovaPay's payment-gateway skeleton was originally extracted from a project called `sub2apipay` (a recharge / subscription payment script for an internal "Sub2API" platform). This document captures the trade-offs and migration decisions made at the time. If you only care about the current architecture, read [README.md](../README.md) and [production-runbook.md](./production-runbook.md) instead.
 
 ---
 
-## NovaPay 目标定位
+## Trade-offs at the time
 
-> 多商户、多支付通道、多支付账号实例的通用支付网关。
+What was worth borrowing from `sub2apipay`:
 
-每个商户在自己的控制台维护支付参数、IP 白名单、回调地址；平台只提供统一接口、签名校验、回调路由、退款能力、审计能力；不代持任何商户的收款资格。
+- A unified payment provider abstraction
+- Verified callbacks feeding into a single order state machine
+- Multi-instance payment account configuration with load balancing
+- Payment limits, timeouts, cancellation, refunds, retries
+- Online configuration and an analytics dashboard
+
+What had to be removed:
+
+- The Sub2API user system
+- Sub2API balance recharge and subscription fulfilment
+- The user-facing payment page that authenticated via `Sub2API token`
+- `Channel / SubscriptionPlan` models, which served Sub2API's own catalog rather than merchants
 
 ---
 
-## 当前已实现的模块映射
+## NovaPay's positioning
 
-下表对照当时的迁移计划与现在的实际落地：
+> A general-purpose multi-merchant payment gateway with multiple channels and multiple payment account instances.
 
-| 早期计划 | 当前位置 | 状态 |
+Each merchant manages their own credentials, IP allowlist, and callback URLs in their own console. The platform only provides a unified API, signature verification, callback routing, refunds, and audit trails. The platform never holds collection capability on behalf of merchants.
+
+---
+
+## Mapping: original plan → current implementation
+
+| Original plan | Current location | Status |
 |---|---|---|
-| Provider 抽象 | `lib/payments/plugins/types.ts` + `lib/payments/providers/*` | ✅ 已实现，并升级为可热插拔的「插件市场」架构 |
-| `GatewayChannel` / `ProviderAccount` / `MerchantChannelBinding` | `prisma/schema.prisma` 中的 `MerchantChannelAccount` + `MerchantChannelBinding` | ✅ 已实现（合并了 ProviderAccount 与 ChannelAccount） |
-| 系统配置中心 | `lib/system-config.ts` + `prisma SystemConfig` | ✅ 已实现，环境变量做兜底，DB 可在线覆盖，带 TTL 缓存 |
-| 订单状态机 | `lib/orders/service.ts` + `lib/orders/status.ts` | ✅ 已实现 `PENDING → PROCESSING → SUCCEEDED / FAILED / REFUNDED / CANCELLED` |
-| 商户签名验签 | `lib/merchants/api-auth.ts` + HMAC-SHA256 | ✅ 已实现（含 nonce 防重放、Idempotency-Key、IP 白名单、时间窗口） |
-| 商户回调投递与重试 | `lib/callbacks/service.ts` + `scripts/callback-retry-worker.ts` | ✅ 已实现（指数退避、`callbacks-worker` 进程） |
-| 退款流程 | `lib/refunds/service.ts` + `app/api/payment-orders/[orderReference]/refunds` | ✅ 已实现 |
-| 财务流水 / 余额快照 / 结算 | `lib/finance/*` + `scripts/finance-worker.ts` | ✅ 已实现（`finance-worker` 进程） |
-| 链上 USDT 到账匹配 | `lib/payments/onchain/*` + `scripts/onchain-worker.ts` | ✅ 已实现（BSC / Base / Solana） |
-| 多支付方式扩展 | 插件市场（`apps/registry/`） | ✅ 当时只想着写死 `wxpay.native`；现在演进成独立 Registry，第三方插件可以无需改网关代码动态接入 |
+| Provider abstraction | `lib/payments/plugins/types.ts` + `lib/payments/providers/*` | ✅ Implemented and upgraded into the hot-pluggable plugin marketplace |
+| `GatewayChannel` / `ProviderAccount` / `MerchantChannelBinding` | `prisma/schema.prisma` — `MerchantChannelAccount` + `MerchantChannelBinding` | ✅ Implemented (ProviderAccount and ChannelAccount were merged into one) |
+| System config center | `lib/system-config.ts` + `prisma SystemConfig` | ✅ Implemented; env vars provide defaults, the database can override at runtime, with TTL caching |
+| Order state machine | `lib/orders/service.ts` + `lib/orders/status.ts` | ✅ Implemented `PENDING → PROCESSING → SUCCEEDED / FAILED / REFUNDED / CANCELLED` |
+| Merchant signing | `lib/merchants/api-auth.ts` + HMAC-SHA256 | ✅ Implemented (nonce replay, Idempotency-Key, IP allowlists, time window) |
+| Merchant callback delivery + retries | `lib/callbacks/service.ts` + `scripts/callback-retry-worker.ts` | ✅ Implemented (exponential backoff, `callbacks-worker` process) |
+| Refund flow | `lib/refunds/service.ts` + `app/api/payment-orders/[orderReference]/refunds` | ✅ Implemented |
+| Finance ledger / balance snapshots / settlements | `lib/finance/*` + `scripts/finance-worker.ts` | ✅ Implemented (`finance-worker` process) |
+| On-chain USDT matching | `lib/payments/onchain/*` + `scripts/onchain-worker.ts` | ✅ Implemented (BSC / Base / Solana) |
+| Multi payment-method extension | The plugin marketplace (`apps/registry/`) | ✅ The original plan only hard-coded `wxpay.native`; this evolved into an independent registry where third-party plugins can extend channels without modifying the gateway |
 
 ---
 
-## 跟早期设想的明显偏差
+## Notable deviations from the original plan
 
-实际工程中，有几处偏离了当年的迁移计划：
+A few things diverged in practice:
 
-**1. 不只支付通道，还做了完整的插件市场**
+**1. The plugin marketplace became a product on its own**
 
-当时只想做支付通道扩展。后来发现「插件分发 + 签名校验 + 许可证 + 沙箱运行时 + 销售/分润」是一套完整产品，单独拆成了 `apps/registry`。
+We initially planned for "extensible payment channels". In practice, plugin distribution + bundle signing + license issuance + sandboxed runtime + sales / revenue sharing turned into a complete product, so it was extracted into `apps/registry`.
 
-**2. 支付账号实例和通道绑定合并**
+**2. Account instances and channel bindings were merged**
 
-早期想要 `GatewayChannel` / `ProviderAccount` / `MerchantChannelBinding` 三层。实际落地为：
+Originally we drafted three layers: `GatewayChannel` / `ProviderAccount` / `MerchantChannelBinding`. The implementation collapsed it to two:
 
-- `MerchantChannelAccount`：商户在某个通道（如 `alipay.page`）下的实例配置
-- `MerchantChannelBinding`：决定某个商户的某个通道走哪个实例
+- `MerchantChannelAccount` — the merchant's per-channel instance (e.g. their `alipay.page` configuration)
+- `MerchantChannelBinding` — which instance to route a given merchant + channel to
 
-通道本身的元数据来自插件，不再单独建表。
+Channel metadata now comes from the plugin manifest, not its own table.
 
-**3. 多账号负载均衡延后**
+**3. Multi-account load balancing deferred**
 
-当年规划的「单通道多账号 + 限额 + 故障转移」在第一版没做（每个商户一个通道实例就够用），等真正有客户场景再加。
+The original plan included "single channel + multiple accounts + per-account limits + failover". The first release skipped it (one instance per merchant per channel was enough); we'll add it when there's a real customer scenario.
 
-**4. USDT 链上支付**
+**4. USDT on-chain support was never in the original plan**
 
-早期没考虑这条线。后来根据真实业务需求增加了 BSC / Base / Solana 三条链，包含锁价、精确金额分配、链上 worker 扫描配单。
-
----
-
-## 推荐参考
-
-- [README.zh-CN.md](../README.zh-CN.md) —— 当前架构概览
-- [production-runbook.md](./production-runbook.md) —— 生产部署
-- [merchant-integration-examples.md](./merchant-integration-examples.md) —— 商户接入示例
-- `apps/registry/README.md` —— 插件市场详细说明
+Added later in response to real demand. Spans BSC / Base / Solana, with locked quotes, exact-amount allocation, and on-chain matching workers.
 
 ---
 
-## 一句话总结
+## Recommended reading
 
-> `sub2apipay` 提供了第一版的形状；NovaPay 长成了一个独立的、商用规格的多商户支付网关 + 插件市场，跟 `sub2apipay` 的业务模型（用户充值 + 订阅）已经完全无关。
+- [README.md](../README.md) — current architecture overview
+- [production-runbook.md](./production-runbook.md) — deployment
+- [merchant-integration-examples.md](./merchant-integration-examples.md) — merchant integration
+- [`apps/registry/README.md`](../apps/registry/README.md) — plugin marketplace deep dive
+
+---
+
+## In one sentence
+
+> `sub2apipay` provided the initial shape. NovaPay grew into a standalone, commercial-grade multi-merchant payment gateway with a plugin marketplace; the business model (user recharge + subscriptions) it inherited from has been entirely replaced.

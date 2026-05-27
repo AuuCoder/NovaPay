@@ -196,8 +196,8 @@ hex(hmac_sha256(apiSecret, "{timestamp}.{nonce}.{rawBody}"))
 
 完整的签名和接入示例：
 
-- [商户接入示例](./docs/merchant-integration-examples.md)
-- [sub2apipay 迁移说明](./docs/sub2apipay-to-novapay.md)
+- [商户接入示例](./docs/merchant-integration-examples.zh-CN.md)
+- [sub2apipay 迁移说明](./docs/sub2apipay-to-novapay.zh-CN.md)
 
 ---
 
@@ -341,4 +341,4 @@ NovaPay 当前**不做**这些事情：
 
 Issues 和 PR 欢迎到 [github.com/AuuCoder/NovaPay](https://github.com/AuuCoder/NovaPay) 提交。
 
-完整运行手册见 [docs/production-runbook.md](./docs/production-runbook.md)。
+完整运行手册见 [docs/production-runbook.zh-CN.md](./docs/production-runbook.zh-CN.md)。
