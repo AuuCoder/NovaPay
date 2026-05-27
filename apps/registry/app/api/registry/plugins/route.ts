@@ -14,6 +14,7 @@
 import { NextResponse } from "next/server";
 import { getRegistryRuntime } from "../../../../lib/runtime/state";
 import { requireConsumer } from "../../../../lib/auth/require-consumer";
+import { resolveRequestOrigin } from "../../../../lib/api/request-origin";
 
 export const runtime = "nodejs";
 
@@ -21,8 +22,7 @@ export async function GET(request: Request) {
   const auth = await requireConsumer(request);
   if (auth.response) return auth.response;
 
-  const url = new URL(request.url);
-  const downloadOrigin = `${url.origin}/api/registry/packages`;
+  const downloadOrigin = `${resolveRequestOrigin(request)}/api/registry/packages`;
   const state = await getRegistryRuntime();
 
   const plugins = state.catalog.map((entry) => {

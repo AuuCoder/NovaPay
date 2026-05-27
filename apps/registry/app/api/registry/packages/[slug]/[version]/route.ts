@@ -14,6 +14,7 @@ import {
 } from "../../../../../../lib/runtime/state";
 import { requireConsumer } from "../../../../../../lib/auth/require-consumer";
 import { apiError } from "../../../../../../lib/api/response";
+import { resolveRequestOrigin } from "../../../../../../lib/api/request-origin";
 
 export const runtime = "nodejs";
 
@@ -33,9 +34,9 @@ export async function GET(
     return apiError(request, "BUNDLE_NOT_FOUND", 404, { slug, version });
   }
 
-  const url = new URL(request.url);
+  const origin = resolveRequestOrigin(request);
   const expiresAt = new Date(Date.now() + DOWNLOAD_EXPIRY_SECONDS * 1000);
-  const downloadUrl = `${url.origin}/api/registry/packages/${slug}/${version}/download?expires=${Math.floor(expiresAt.getTime() / 1000)}`;
+  const downloadUrl = `${origin}/api/registry/packages/${slug}/${version}/download?expires=${Math.floor(expiresAt.getTime() / 1000)}`;
 
   return NextResponse.json({
     slug,

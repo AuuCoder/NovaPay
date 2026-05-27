@@ -10,6 +10,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getRegistryRuntime } from "../../../../../lib/runtime/state";
 import { requireConsumer } from "../../../../../lib/auth/require-consumer";
 import { apiError } from "../../../../../lib/api/response";
+import { resolveRequestOrigin } from "../../../../../lib/api/request-origin";
 
 export const runtime = "nodejs";
 
@@ -27,11 +28,11 @@ export async function GET(
     return apiError(request, "PLUGIN_NOT_FOUND", 404, { slug });
   }
 
-  const url = new URL(request.url);
+  const url = resolveRequestOrigin(request);
   const bundle = state.demoBundles.get(`${entry.slug}@${entry.version}`);
   const plugin = {
     ...entry,
-    downloadUrl: `${url.origin}/api/registry/packages/${entry.slug}/${entry.version}/download`,
+    downloadUrl: `${url}/api/registry/packages/${entry.slug}/${entry.version}/download`,
     checksum: bundle ? `sha256:${bundle.pipelineResult.sha256}` : null,
     signature: bundle ? bundle.pipelineResult.signature : null,
   };
