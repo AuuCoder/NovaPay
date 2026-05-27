@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCurrentLocale } from "@/lib/i18n-server";
-import { requireRegistryUserSession } from "../../../../../../lib/auth/session";
+import { getEffectiveDeveloperIdFromSession, requireRegistryUserSession } from "../../../../../../lib/auth/session";
 import { canDeveloperManagePlugin } from "../../../../../../lib/developer/plugin-ownership";
 import { isOfficialPluginSlug } from "../../../../../../lib/plugins/official";
 import {
@@ -39,7 +39,7 @@ export default async function DeveloperVersionDetailPage({
   }));
   const verificationProfile = bundle.pipelineResult.manifest.verificationProfile;
   const officialPlugin = isOfficialPluginSlug(slug);
-  const developerId = session.actorKind === "DEVELOPER" ? session.actorId : null;
+  const developerId = getEffectiveDeveloperIdFromSession(session);
   const canManage = await canDeveloperManagePlugin(slug, developerId);
   const content =
     locale === "en"

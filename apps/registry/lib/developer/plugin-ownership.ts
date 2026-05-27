@@ -1,4 +1,4 @@
-import { isOfficialPluginSlug } from "../plugins/official";
+import { isOfficialPluginSlug, OFFICIAL_DEVELOPER_ID } from "../plugins/official";
 import { getPrismaClient } from "../runtime/prisma-client";
 
 export class PluginOwnershipError extends Error {
@@ -57,14 +57,17 @@ export async function canDeveloperManagePlugin(
   slug: string,
   developerId: string | null,
 ) {
-  if (!developerId || isOfficialPluginSlug(slug)) {
+  if (!developerId) {
     return false;
+  }
+  if (isOfficialPluginSlug(slug)) {
+    return developerId === OFFICIAL_DEVELOPER_ID;
   }
   return (await getPluginOwner(slug)) === developerId;
 }
 
 export async function ensurePluginOwnership(slug: string, developerId: string) {
-  if (isOfficialPluginSlug(slug)) {
+  if (isOfficialPluginSlug(slug) && developerId !== OFFICIAL_DEVELOPER_ID) {
     throw new PluginOwnershipError(
       "RESERVED_SLUG",
       "The `novapay.*` namespace is reserved for official NovaPay plugins.",

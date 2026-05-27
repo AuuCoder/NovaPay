@@ -160,6 +160,8 @@ services:
     command: npm run start
     ports:
       - "3100:3000"
+    volumes:
+      - ../artifacts:/artifacts:ro
     depends_on:
       postgres:
         condition: service_healthy

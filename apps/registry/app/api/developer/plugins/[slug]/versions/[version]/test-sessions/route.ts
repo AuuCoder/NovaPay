@@ -1,5 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { requireRegistryDeveloperRequest } from "../../../../../../../../lib/auth/session";
+import {
+  getEffectiveDeveloperId,
+  requireRegistryDeveloperRequest,
+} from "../../../../../../../../lib/auth/session";
 import { assertPluginOwnership, canDeveloperManagePlugin } from "../../../../../../../../lib/developer/plugin-ownership";
 import {
   createPluginVersionTestSession,
@@ -20,8 +23,9 @@ export async function GET(
     return auth.response;
   }
 
-  if (auth.actor.kind === "SESSION" && auth.actor.session.actorKind === "DEVELOPER") {
-    if (!(await canDeveloperManagePlugin((await params).slug, auth.actor.session.actorId))) {
+  if (auth.actor.kind === "SESSION") {
+    const developerId = getEffectiveDeveloperId(auth.actor);
+    if (developerId && !(await canDeveloperManagePlugin((await params).slug, developerId))) {
       return apiError(request, "NOT_OWNER", 403);
     }
   }
@@ -46,13 +50,14 @@ export async function POST(
     return auth.response;
   }
 
-  if (auth.actor.kind !== "SESSION" || auth.actor.session.actorKind !== "DEVELOPER") {
+  const developerId = getEffectiveDeveloperId(auth.actor);
+  if (!developerId) {
     return apiError(request, "DEVELOPER_ACCOUNT_REQUIRED", 403);
   }
 
   const { slug, version } = await params;
   try {
-    await assertPluginOwnership(slug, auth.actor.session.actorId);
+    await assertPluginOwnership(slug, developerId);
   } catch {
     return apiError(request, "NOT_OWNER", 403);
   }

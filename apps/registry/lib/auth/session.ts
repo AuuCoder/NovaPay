@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { apiError, resolveApiMessage, resolveRequestLocale } from "../api/response";
+import { OFFICIAL_DEVELOPER_ID } from "../plugins/official";
 import { getPrismaClient } from "../runtime/prisma-client";
 import type {
   DeveloperAccountStatus,
@@ -49,6 +50,21 @@ export type RegistryDeveloperRequestActor =
       developerId: string;
       tokenId: string;
     };
+
+export function getEffectiveDeveloperId(
+  actor: RegistryDeveloperRequestActor,
+): string | null {
+  if (actor.kind === "PAT") {
+    return actor.developerId;
+  }
+  if (actor.session.actorKind === "DEVELOPER") {
+    return actor.session.actorId;
+  }
+  if (actor.session.actorKind === "ADMIN_SSO") {
+    return OFFICIAL_DEVELOPER_ID;
+  }
+  return null;
+}
 
 export interface RegistryDeveloperRegistrationInput {
   email: string;
@@ -409,6 +425,24 @@ export async function requireRegistryDeveloperSession() {
   return session;
 }
 
+export async function requireRegistryPluginAuthorSession() {
+  const session = await requireRegistryUserSession();
+
+  if (session.actorKind !== "DEVELOPER" && session.actorKind !== "ADMIN_SSO") {
+    redirect("/developer/tokens?error=developer_account_required");
+  }
+
+  return session;
+}
+
+export function getEffectiveDeveloperIdFromSession(
+  session: RegistrySession,
+): string | null {
+  if (session.actorKind === "DEVELOPER") return session.actorId;
+  if (session.actorKind === "ADMIN_SSO") return OFFICIAL_DEVELOPER_ID;
+  return null;
+}
+
 export async function requireRegistryDeveloperSessionRequest(request: Request) {
   const auth = await requireRegistryUserRequest(request);
 
@@ -417,6 +451,26 @@ export async function requireRegistryDeveloperSessionRequest(request: Request) {
   }
 
   if (auth.session.actorKind !== "DEVELOPER") {
+    return {
+      session: null,
+      response: apiError(request, "DEVELOPER_ACCOUNT_REQUIRED", 403),
+    };
+  }
+
+  return auth;
+}
+
+export async function requireRegistryPluginAuthorSessionRequest(request: Request) {
+  const auth = await requireRegistryUserRequest(request);
+
+  if (auth.response) {
+    return auth;
+  }
+
+  if (
+    auth.session.actorKind !== "DEVELOPER" &&
+    auth.session.actorKind !== "ADMIN_SSO"
+  ) {
     return {
       session: null,
       response: apiError(request, "DEVELOPER_ACCOUNT_REQUIRED", 403),

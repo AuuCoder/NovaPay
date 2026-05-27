@@ -1,5 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { requireRegistryDeveloperRequest } from "../../../../../../../../lib/auth/session";
+import {
+  getEffectiveDeveloperId,
+  requireRegistryDeveloperRequest,
+} from "../../../../../../../../lib/auth/session";
 import { assertPluginOwnership } from "../../../../../../../../lib/developer/plugin-ownership";
 import {
   getPluginVersionRecord,
@@ -22,13 +25,14 @@ export async function POST(
     return auth.response;
   }
 
-  if (auth.actor.kind !== "SESSION" || auth.actor.session.actorKind !== "DEVELOPER") {
+  const developerId = getEffectiveDeveloperId(auth.actor);
+  if (!developerId) {
     return apiError(request, "DEVELOPER_ACCOUNT_REQUIRED", 403);
   }
 
   const { slug, version } = await params;
   try {
-    await assertPluginOwnership(slug, auth.actor.session.actorId);
+    await assertPluginOwnership(slug, developerId);
   } catch {
     return apiError(request, "NOT_OWNER", 403);
   }

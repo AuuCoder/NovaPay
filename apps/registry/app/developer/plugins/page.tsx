@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getCurrentLocale } from "@/lib/i18n-server";
-import { requireRegistryUserSession } from "../../../lib/auth/session";
+import { getEffectiveDeveloperIdFromSession, requireRegistryUserSession } from "../../../lib/auth/session";
 import {
   canDeveloperManagePlugin,
   listPluginOwnerships,
@@ -104,7 +104,7 @@ export default async function DeveloperPluginsPage({
   const locale = await getCurrentLocale();
   const state = await getRegistryRuntime();
   const ownerships = await listPluginOwnerships();
-  const developerId = session.actorKind === "DEVELOPER" ? session.actorId : null;
+  const developerId = getEffectiveDeveloperIdFromSession(session);
   const params = (await searchParams) ?? {};
 
   const filter =

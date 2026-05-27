@@ -15,7 +15,10 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { requireRegistryDeveloperRequest } from "../../../../../../lib/auth/session";
+import {
+  getEffectiveDeveloperId,
+  requireRegistryDeveloperRequest,
+} from "../../../../../../lib/auth/session";
 import {
   ensurePluginOwnership,
   PluginOwnershipError,
@@ -75,7 +78,8 @@ export async function POST(
     return auth.response;
   }
 
-  if (auth.actor.kind !== "SESSION" || auth.actor.session.actorKind !== "DEVELOPER") {
+  const developerId = getEffectiveDeveloperId(auth.actor);
+  if (!developerId) {
     return apiError(request, "DEVELOPER_ACCOUNT_REQUIRED", 403);
   }
 
@@ -142,7 +146,7 @@ export async function POST(
   }
 
   try {
-    await ensurePluginOwnership(slug, auth.actor.session.actorId);
+    await ensurePluginOwnership(slug, developerId);
 
     // Run the bundle pipeline (extract → sha256 → store → sign)
     const pipelineResult = await runBundlePipeline(

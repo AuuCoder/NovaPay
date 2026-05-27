@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { requireRegistryDeveloperSessionRequest } from "../../../../lib/auth/session";
+import { requireRegistryPluginAuthorSessionRequest } from "../../../../lib/auth/session";
 
 export const runtime = "nodejs";
 
@@ -74,7 +74,7 @@ function buildRuntimeSource(input: {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await requireRegistryDeveloperSessionRequest(request);
+  const auth = await requireRegistryPluginAuthorSessionRequest(request);
   if (auth.response) {
     return auth.response;
   }

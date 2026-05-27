@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCurrentLocale } from "@/lib/i18n-server";
-import { requireRegistryUserSession } from "../../../../lib/auth/session";
+import { getEffectiveDeveloperIdFromSession, requireRegistryUserSession } from "../../../../lib/auth/session";
 import { canDeveloperManagePlugin } from "../../../../lib/developer/plugin-ownership";
 import {
   formatRegistryPluginPricing,
@@ -32,7 +32,7 @@ export default async function DeveloperPluginDetailPage({
     }))
     .sort((left, right) => right.version.localeCompare(left.version));
 
-  const developerId = session.actorKind === "DEVELOPER" ? session.actorId : null;
+  const developerId = getEffectiveDeveloperIdFromSession(session);
   const canManage = await canDeveloperManagePlugin(slug, developerId);
 
   const content =

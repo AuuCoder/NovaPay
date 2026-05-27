@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireRegistryDeveloperSession } from "../../../../lib/auth/session";
+import { requireRegistryPluginAuthorSession } from "../../../../lib/auth/session";
 import { getCurrentLocale } from "@/lib/i18n-server";
 import { TemplateDownloader } from "./template-downloader";
 
@@ -46,7 +46,7 @@ function buildJsonBundleExample() {
 }
 
 export default async function NewPluginGuidePage() {
-  await requireRegistryDeveloperSession();
+  await requireRegistryPluginAuthorSession();
   const locale = await getCurrentLocale();
   const content =
     locale === "en"

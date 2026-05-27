@@ -67,7 +67,7 @@ import {
   createObjectStoreClient,
   type ObjectStoreClient,
 } from "../storage/object-store";
-import { isOfficialPluginSlug } from "../plugins/official";
+import { isOfficialPluginSlug, OFFICIAL_DEVELOPER_ID } from "../plugins/official";
 import { getSettlementSettings } from "../settlement/settings";
 import type {
   VerificationProfile,
@@ -171,7 +171,6 @@ const REGISTRY_PROJECT_ROOT = path.resolve(
   "..",
   "..",
 );
-const OFFICIAL_DEVELOPER_ID = "novapay-official";
 const OFFICIAL_DEVELOPER_EMAIL = "official@plugin.novapay.local";
 
 interface RuntimePersistenceSnapshot {
