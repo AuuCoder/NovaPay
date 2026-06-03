@@ -137,6 +137,12 @@ services:
     command: npm run start
     ports:
       - "3000:3000"
+    volumes:
+      # Downloaded REMOTE_SIGNED plugin bundles live under runtime/plugins.
+      # Persist + share them so a container rebuild does not wipe installed
+      # plugins (PluginPackageInstall rows would otherwise point at missing
+      # files, breaking channel template provisioning).
+      - novapay-plugin-runtime:/app/runtime/plugins
     depends_on:
       postgres:
         condition: service_healthy
@@ -185,6 +191,8 @@ services:
     env_file:
       - ../.env
     command: npm run callbacks:worker
+    volumes:
+      - novapay-plugin-runtime:/app/runtime/plugins
     depends_on:
       postgres:
         condition: service_healthy
@@ -197,6 +205,8 @@ services:
     env_file:
       - ../.env
     command: npm run finance:worker
+    volumes:
+      - novapay-plugin-runtime:/app/runtime/plugins
     depends_on:
       postgres:
         condition: service_healthy
@@ -209,6 +219,8 @@ services:
     env_file:
       - ../.env
     command: npm run onchain:worker
+    volumes:
+      - novapay-plugin-runtime:/app/runtime/plugins
     depends_on:
       postgres:
         condition: service_healthy
@@ -217,3 +229,4 @@ services:
 volumes:
   novapay-postgres-data:
   novapay-minio-data:
+  novapay-plugin-runtime:
