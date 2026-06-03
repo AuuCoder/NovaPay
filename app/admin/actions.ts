@@ -20,6 +20,10 @@ import {
 } from "@/lib/finance/settlements";
 import { generateMerchantApiCredential } from "@/lib/merchant-credentials";
 import {
+  createMerchantChannelAccountFromForm,
+  updateMerchantChannelAccountFromForm,
+} from "@/lib/payments/merchant-channel-account-service";
+import {
   getMarketplacePluginUsageBySlug,
   getMarketplacePluginSafetyState,
   installRemoteMarketplacePluginPackage,
@@ -628,6 +632,108 @@ export async function createMerchantUserAction(formData: FormData) {
   }
 
   redirect(withMessage(redirectTo, "success", "商户登录账号已创建。"));
+}
+
+export async function createMerchantChannelAccountAsAdminAction(formData: FormData) {
+  const session = await requireAdminPermission("merchant:write");
+  const merchantId = getString(formData, "merchantId");
+  const redirectTo = getRedirectTo(
+    formData,
+    merchantId ? `/admin/merchants/${merchantId}` : "/admin/merchants",
+  );
+
+  try {
+    if (!merchantId) {
+      throw new Error("商户 ID 不能为空。");
+    }
+
+    const prisma = getPrismaClient();
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: { id: true, code: true },
+    });
+
+    if (!merchant) {
+      throw new Error("商户不存在。");
+    }
+
+    const { account, template } = await createMerchantChannelAccountFromForm({
+      merchantId,
+      formData,
+    });
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "admin.merchant.channel_account.create",
+      resourceType: "merchant_channel_account",
+      resourceId: account.id,
+      summary: `管理员为商户 ${merchant.code} 新建 ${template.channelCode} 通道实例 ${account.displayName}。`,
+      metadata: {
+        merchantId,
+        merchantCode: merchant.code,
+        channelCode: template.channelCode,
+        providerKey: template.providerKey,
+        callbackToken: account.callbackToken,
+        enabled: account.enabled,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "支付通道实例已创建。"));
+}
+
+export async function updateMerchantChannelAccountAsAdminAction(formData: FormData) {
+  const session = await requireAdminPermission("merchant:write");
+  const merchantId = getString(formData, "merchantId");
+  const redirectTo = getRedirectTo(
+    formData,
+    merchantId ? `/admin/merchants/${merchantId}` : "/admin/merchants",
+  );
+
+  try {
+    if (!merchantId) {
+      throw new Error("商户 ID 不能为空。");
+    }
+
+    const prisma = getPrismaClient();
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: { id: true, code: true },
+    });
+
+    if (!merchant) {
+      throw new Error("商户不存在。");
+    }
+
+    const { account, template, previousCallbackToken } =
+      await updateMerchantChannelAccountFromForm({
+        merchantId,
+        formData,
+      });
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "admin.merchant.channel_account.update",
+      resourceType: "merchant_channel_account",
+      resourceId: account.id,
+      summary: `管理员更新商户 ${merchant.code} 的 ${template.channelCode} 通道实例 ${account.displayName}。`,
+      metadata: {
+        merchantId,
+        merchantCode: merchant.code,
+        channelCode: template.channelCode,
+        callbackToken: previousCallbackToken,
+        enabled: account.enabled,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "支付通道实例已更新。"));
 }
 
 export async function updateMerchantUserAction(formData: FormData) {

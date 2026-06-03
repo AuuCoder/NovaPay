@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import {
   createMerchantUserAction,
   createMerchantApiCredentialAction,
+  createMerchantChannelAccountAsAdminAction,
+  updateMerchantChannelAccountAsAdminAction,
   reviewMerchantAction,
   updateMerchantAction,
   updateMerchantUserAction,
@@ -33,8 +35,16 @@ import {
 import { PaymentStatus } from "@/generated/prisma/enums";
 import { requireAdminPermission } from "@/lib/admin-session";
 import { getCurrentLocale } from "@/lib/i18n-server";
+import {
+  getActiveMerchantChannelTemplates,
+  maskMerchantChannelConfig,
+} from "@/lib/merchant-channel-accounts";
 import { getMerchantDisplayRole } from "@/lib/merchant-session";
-import { getMerchantDisplayName, getMerchantEditableName } from "@/lib/merchant-profile-completion";
+import {
+  getMerchantDisplayName,
+  getMerchantEditableName,
+  getMerchantProfileMissingFields,
+} from "@/lib/merchant-profile-completion";
 import { getPrismaClient } from "@/lib/prisma";
 import { hasPermission } from "@/lib/rbac";
 import { maskStoredSecret } from "@/lib/secret-box";
@@ -89,6 +99,8 @@ export default async function MerchantDetailPage({
           displayName: true,
           enabled: true,
           callbackToken: true,
+          config: true,
+          remark: true,
           lastVerifiedAt: true,
           lastErrorMessage: true,
           updatedAt: true,
@@ -153,6 +165,21 @@ export default async function MerchantDetailPage({
     merchant._count.paymentOrders > 0
       ? `${((successfulOrders / merchant._count.paymentOrders) * 100).toFixed(1)}%`
       : "0%";
+  const canManageChannels = hasPermission(session.adminUser.role, "merchant:write");
+  const channelTemplates = await getActiveMerchantChannelTemplates(merchant.id, locale);
+  const profileMissingFields = getMerchantProfileMissingFields(merchant, locale);
+  const hasProfileGaps = profileMissingFields.length > 0;
+  const accountsByChannel = new Map<string, typeof merchant.channelAccounts>();
+  for (const account of merchant.channelAccounts) {
+    const list = accountsByChannel.get(account.channelCode) ?? [];
+    list.push(account);
+    accountsByChannel.set(account.channelCode, list);
+  }
+  const defaultAccountIdByChannel = new Map(
+    merchant.channelBindings
+      .filter((binding) => binding.enabled && binding.merchantChannelAccountId)
+      .map((binding) => [binding.channelCode, binding.merchantChannelAccountId as string]),
+  );
   const content =
     locale === "en"
       ? {
@@ -260,6 +287,31 @@ export default async function MerchantDetailPage({
           accountVerifiedAt: "Last Verified",
           accountError: "Latest Error",
           accountPluginButton: "View Plugin",
+          channelManageDesc:
+            "Create or update payment channel instances on behalf of this merchant. This is the same provisioning flow as the merchant console and is the only way to add channels for merchants without a login account (such as the platform official bridge merchant).",
+          channelCreateTitle: "Create a channel instance",
+          channelCreateChannelLabel: "Payment Channel",
+          channelNoTemplates:
+            "No installable payment plugins are available for this merchant yet. Install a payment plugin from the plugin market first.",
+          channelInstanceNameLabel: "Instance Name",
+          channelRemarkLabel: "Remark",
+          channelRemarkPlaceholder: "Account usage, business line, or environment notes",
+          channelEnableNow: "Enable immediately",
+          channelEnableAfterProfile: "Complete the merchant profile before enabling this regulated channel",
+          channelSetDefault: "Set as the default instance for this channel",
+          channelCreateButton: "Create Channel Instance",
+          channelCreateDraftButton: "Save Draft Instance",
+          channelProfileGapTitle: "Profile required for regulated channels",
+          channelProfileGapDesc:
+            "Regulated channels such as Alipay and WeChat Pay require legal entity and contact details before activation. Drafts can still be saved, then enabled after the profile is complete.",
+          channelMissingFields: "Missing fields",
+          channelEditTitle: "Edit instances",
+          channelDefaultBadge: "Default Instance",
+          channelSaveButton: "Save Instance",
+          channelConfigHint: "Sensitive fields stay masked. Leave a masked value unchanged to keep the stored secret.",
+          channelReadonly: "This account can view channel instances but cannot create or update them.",
+          required: "Required",
+          optional: "Optional",
           credentialsEyebrow: "API Credentials",
           credentialsTitle: "Merchant API credentials",
           credentialsDescription:
@@ -394,6 +446,31 @@ export default async function MerchantDetailPage({
           accountVerifiedAt: "最近校验",
           accountError: "最近错误",
           accountPluginButton: "查看插件",
+          channelManageDesc:
+            "在这里可由管理员代该商户创建或更新支付通道实例。流程与商户控制台完全一致，也是为没有登录账号的商户（例如平台官方桥接商户）新增通道的唯一入口。",
+          channelCreateTitle: "新增通道实例",
+          channelCreateChannelLabel: "支付通道",
+          channelNoTemplates:
+            "当前商户还没有可用的支付插件。请先在插件市场为该商户安装支付插件后再创建通道实例。",
+          channelInstanceNameLabel: "实例名称",
+          channelRemarkLabel: "备注",
+          channelRemarkPlaceholder: "可填写账号用途、业务线或环境说明",
+          channelEnableNow: "创建后立即启用",
+          channelEnableAfterProfile: "请先补齐商户资料后再启用该高合规通道",
+          channelSetDefault: "设为当前通道默认实例",
+          channelCreateButton: "创建通道实例",
+          channelCreateDraftButton: "保存草稿实例",
+          channelProfileGapTitle: "高合规通道需补齐资料",
+          channelProfileGapDesc:
+            "支付宝、微信支付等高合规通道在启用前必须补齐商户主体与联系人资料。可先保存草稿，待资料补齐后再启用。",
+          channelMissingFields: "待补充字段",
+          channelEditTitle: "编辑实例",
+          channelDefaultBadge: "默认实例",
+          channelSaveButton: "保存实例",
+          channelConfigHint: "敏感字段会保持脱敏展示。若不修改脱敏值即可保留原有密钥。",
+          channelReadonly: "当前账号只能查看通道实例，不能新增或更新。",
+          required: "必填",
+          optional: "选填",
           credentialsEyebrow: "API Credentials",
           credentialsTitle: "商户 API 凭证",
           credentialsDescription:
@@ -900,43 +977,281 @@ export default async function MerchantDetailPage({
           </span>
         </div>
 
+        <p className="mt-4 max-w-3xl text-sm leading-7 text-muted">{content.channelManageDesc}</p>
+
+        {hasProfileGaps && channelTemplates.some((template) => template.requiresMerchantProfileCompletion) ? (
+          <div className="mt-4 rounded-[1.25rem] border border-[#f3d1ab] bg-[#fff4e7] p-4 text-sm text-[#8a4d18]">
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusBadge tone="warning">{content.channelProfileGapTitle}</StatusBadge>
+              <span>{content.channelProfileGapDesc}</span>
+            </div>
+            <p className="mt-3 leading-7">
+              {content.channelMissingFields}
+              {locale === "en" ? ": " : "："}
+              {profileMissingFields.join(locale === "en" ? ", " : "、")}
+            </p>
+          </div>
+        ) : null}
+
+        {!canManageChannels ? (
+          <div className="mt-6 rounded-[1.25rem] border border-line bg-white/75 p-5 text-sm leading-7 text-muted">
+            {content.channelReadonly}
+          </div>
+        ) : channelTemplates.length === 0 ? (
+          <div className="mt-6 rounded-[1.25rem] border border-dashed border-line p-6 text-sm leading-7 text-muted">
+            {content.channelNoTemplates}
+          </div>
+        ) : (
+          <div className="mt-6 grid gap-6">
+            <h3 className="text-lg font-semibold text-foreground">{content.channelCreateTitle}</h3>
+            <div className="grid gap-6 xl:grid-cols-2">
+              {channelTemplates.map((template) => {
+                const blockedByProfile =
+                  template.requiresMerchantProfileCompletion && hasProfileGaps;
+                const hasDefault = defaultAccountIdByChannel.has(template.channelCode);
+
+                return (
+                  <form
+                    key={template.channelCode}
+                    action={createMerchantChannelAccountAsAdminAction}
+                    className="rounded-[1.5rem] border border-line bg-white/75 p-5"
+                  >
+                    <input type="hidden" name="merchantId" value={merchant.id} />
+                    <input type="hidden" name="redirectTo" value={`/admin/merchants/${merchant.id}`} />
+                    <input type="hidden" name="channelCode" value={template.channelCode} />
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-base font-semibold text-foreground">{template.title}</p>
+                        <p className="mt-1 font-mono text-xs text-muted">{template.channelCode}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-4">
+                      <LabeledField label={content.channelInstanceNameLabel}>
+                        <input
+                          name="displayName"
+                          placeholder={`${template.title} / 正式环境`}
+                          className={inputClass}
+                        />
+                      </LabeledField>
+
+                      {template.fields.map((field) => (
+                        <LabeledField
+                          key={field.key}
+                          label={field.label}
+                          hint={field.required ? content.required : content.optional}
+                        >
+                          {field.multiline ? (
+                            <textarea
+                              name={`config_${field.key}`}
+                              placeholder={field.placeholder}
+                              className={`${textareaClass} min-h-[110px] font-sans text-sm`}
+                            />
+                          ) : (
+                            <input
+                              name={`config_${field.key}`}
+                              placeholder={field.placeholder}
+                              className={inputClass}
+                            />
+                          )}
+                        </LabeledField>
+                      ))}
+
+                      <LabeledField label={content.channelRemarkLabel}>
+                        <textarea
+                          name="remark"
+                          placeholder={content.channelRemarkPlaceholder}
+                          className={`${textareaClass} min-h-[80px] font-sans text-sm`}
+                        />
+                      </LabeledField>
+
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="rounded-[1.25rem] border border-line bg-white/65 p-4">
+                          <label className="flex items-center gap-3 text-sm font-medium text-foreground">
+                            <input
+                              type="checkbox"
+                              name="enabled"
+                              defaultChecked={!blockedByProfile}
+                              disabled={blockedByProfile}
+                              className="h-4 w-4 rounded border-line"
+                            />
+                            {blockedByProfile ? content.channelEnableAfterProfile : content.channelEnableNow}
+                          </label>
+                        </div>
+                        <div className="rounded-[1.25rem] border border-line bg-white/65 p-4">
+                          <label className="flex items-center gap-3 text-sm font-medium text-foreground">
+                            <input
+                              type="checkbox"
+                              name="setAsDefault"
+                              defaultChecked={!hasDefault}
+                              className="h-4 w-4 rounded border-line"
+                            />
+                            {content.channelSetDefault}
+                          </label>
+                        </div>
+                      </div>
+
+                      <div>
+                        <button type="submit" className={buttonClass}>
+                          {blockedByProfile ? content.channelCreateDraftButton : content.channelCreateButton}
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {merchant.channelAccounts.length === 0 ? (
           <div className="mt-6 rounded-[1.25rem] border border-dashed border-line p-6 text-sm leading-7 text-muted">
             {content.noAccounts}
           </div>
         ) : (
-          <div className="mt-6 grid gap-4 xl:grid-cols-2">
-            {merchant.channelAccounts.map((account) => (
-              <article key={account.id} className="rounded-[1.25rem] border border-line bg-white/75 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-foreground">{account.displayName}</p>
-                    <p className="mt-1 font-mono text-xs text-muted">{account.channelCode}</p>
-                  </div>
-                  <StatusBadge tone={account.enabled ? "success" : "danger"}>
-                    {account.enabled ? content.activeStatus : content.inactiveStatus}
-                  </StatusBadge>
-                </div>
-                <p className="mt-3 font-mono text-xs text-muted">{account.callbackToken}</p>
-                <p className="mt-2 text-xs text-muted">{content.accountUpdatedAt} {formatDateTime(account.updatedAt, locale)}</p>
-                <p className="mt-1 text-xs text-muted">{content.accountVerifiedAt} {formatDateTime(account.lastVerifiedAt, locale)}</p>
-                {account.lastErrorMessage ? (
-                  <p className="mt-2 text-xs text-[#9b3d18]">{content.accountError}：{account.lastErrorMessage}</p>
-                ) : null}
-                <div className="mt-4">
-                  <Link
-                    href={buildPageHref(
-                      "/admin/plugins",
-                      { channelCode: account.channelCode },
-                      1,
+          <div className="mt-8 grid gap-4">
+            <h3 className="text-lg font-semibold text-foreground">{content.channelEditTitle}</h3>
+            <div className="grid gap-4 xl:grid-cols-2">
+              {merchant.channelAccounts.map((account) => {
+                const template = channelTemplates.find(
+                  (item) => item.channelCode === account.channelCode,
+                );
+                const maskedConfig = maskMerchantChannelConfig(account.config) as Record<
+                  string,
+                  string
+                >;
+                const isDefault =
+                  defaultAccountIdByChannel.get(account.channelCode) === account.id;
+                const blockedByProfile = Boolean(
+                  template?.requiresMerchantProfileCompletion && hasProfileGaps && !account.enabled,
+                );
+
+                return (
+                  <article key={account.id} className="rounded-[1.25rem] border border-line bg-white/75 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-foreground">{account.displayName}</p>
+                        <p className="mt-1 font-mono text-xs text-muted">{account.channelCode}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <StatusBadge tone={account.enabled ? "success" : "danger"}>
+                          {account.enabled ? content.activeStatus : content.inactiveStatus}
+                        </StatusBadge>
+                        {isDefault ? <StatusBadge tone="info">{content.channelDefaultBadge}</StatusBadge> : null}
+                      </div>
+                    </div>
+                    <p className="mt-3 font-mono text-xs text-muted">{account.callbackToken}</p>
+                    <p className="mt-2 text-xs text-muted">{content.accountUpdatedAt} {formatDateTime(account.updatedAt, locale)}</p>
+                    <p className="mt-1 text-xs text-muted">{content.accountVerifiedAt} {formatDateTime(account.lastVerifiedAt, locale)}</p>
+                    {account.lastErrorMessage ? (
+                      <p className="mt-2 text-xs text-[#9b3d18]">{content.accountError}：{account.lastErrorMessage}</p>
+                    ) : null}
+
+                    {canManageChannels && template ? (
+                      <form
+                        action={updateMerchantChannelAccountAsAdminAction}
+                        className="mt-4 grid gap-4 border-t border-line/70 pt-4"
+                      >
+                        <input type="hidden" name="merchantId" value={merchant.id} />
+                        <input type="hidden" name="redirectTo" value={`/admin/merchants/${merchant.id}`} />
+                        <input type="hidden" name="id" value={account.id} />
+
+                        <LabeledField label={content.channelInstanceNameLabel}>
+                          <input name="displayName" defaultValue={account.displayName} className={inputClass} />
+                        </LabeledField>
+
+                        {template.fields.map((field) => (
+                          <LabeledField
+                            key={field.key}
+                            label={field.label}
+                            hint={field.required ? content.required : content.optional}
+                          >
+                            {field.multiline ? (
+                              <textarea
+                                name={`config_${field.key}`}
+                                defaultValue={maskedConfig[field.key] ?? ""}
+                                className={`${textareaClass} min-h-[110px] font-sans text-sm`}
+                              />
+                            ) : (
+                              <input
+                                name={`config_${field.key}`}
+                                defaultValue={maskedConfig[field.key] ?? ""}
+                                className={inputClass}
+                              />
+                            )}
+                          </LabeledField>
+                        ))}
+
+                        <LabeledField label={content.channelRemarkLabel}>
+                          <textarea
+                            name="remark"
+                            defaultValue={account.remark ?? ""}
+                            className={`${textareaClass} min-h-[80px] font-sans text-sm`}
+                          />
+                        </LabeledField>
+
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="rounded-[1.25rem] border border-line bg-white/65 p-4">
+                            <label className="flex items-center gap-3 text-sm font-medium text-foreground">
+                              <input
+                                type="checkbox"
+                                name="enabled"
+                                defaultChecked={account.enabled}
+                                disabled={blockedByProfile}
+                                className="h-4 w-4 rounded border-line"
+                              />
+                              {blockedByProfile ? content.channelEnableAfterProfile : content.channelEnableNow}
+                            </label>
+                          </div>
+                          <div className="rounded-[1.25rem] border border-line bg-white/65 p-4">
+                            <label className="flex items-center gap-3 text-sm font-medium text-foreground">
+                              <input
+                                type="checkbox"
+                                name="setAsDefault"
+                                defaultChecked={isDefault}
+                                className="h-4 w-4 rounded border-line"
+                              />
+                              {content.channelSetDefault}
+                            </label>
+                          </div>
+                        </div>
+
+                        <p className="text-xs leading-6 text-muted">{content.channelConfigHint}</p>
+
+                        <div className="flex flex-wrap gap-3">
+                          <button type="submit" className={buttonClass}>
+                            {content.channelSaveButton}
+                          </button>
+                          <Link
+                            href={buildPageHref(
+                              "/admin/plugins",
+                              { channelCode: account.channelCode },
+                              1,
+                            )}
+                            className="inline-flex rounded-xl border border-line bg-white px-3 py-2 text-xs font-medium text-foreground"
+                          >
+                            {content.accountPluginButton}
+                          </Link>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="mt-4">
+                        <Link
+                          href={buildPageHref(
+                            "/admin/plugins",
+                            { channelCode: account.channelCode },
+                            1,
+                          )}
+                          className="inline-flex rounded-xl border border-line bg-white px-3 py-2 text-xs font-medium text-foreground"
+                        >
+                          {content.accountPluginButton}
+                        </Link>
+                      </div>
                     )}
-                    className="inline-flex rounded-xl border border-line bg-white px-3 py-2 text-xs font-medium text-foreground"
-                  >
-                    {content.accountPluginButton}
-                  </Link>
-                </div>
-              </article>
-            ))}
+                  </article>
+                );
+              })}
+            </div>
           </div>
         )}
       </section>
