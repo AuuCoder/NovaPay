@@ -1,7 +1,6 @@
 "use server";
 
 import { randomBytes } from "node:crypto";
-import type { Prisma } from "@/generated/prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
@@ -18,11 +17,11 @@ import {
   stashMerchantCredentialReveal,
 } from "@/lib/merchant-credential-reveal";
 import { revealMerchantCredentialSecret } from "@/lib/merchant-credentials";
-import {
-  getActiveMerchantChannelTemplate,
-  generateMerchantChannelCallbackToken,
-} from "@/lib/merchant-channel-accounts";
 import { generateMerchantApiCredential } from "@/lib/merchant-credentials";
+import {
+  createMerchantChannelAccountFromForm,
+  updateMerchantChannelAccountFromForm,
+} from "@/lib/payments/merchant-channel-account-service";
 import {
   createPaymentOrder,
   closeMerchantPaymentOrder,
@@ -31,21 +30,17 @@ import {
 import { hashPassword } from "@/lib/password";
 import {
   installMerchantMarketplacePlugin,
-  isMerchantPaymentPluginInstalled,
   listMerchantInstalledPaymentChannels,
   purchaseAndIssueLicense,
   uninstallMerchantMarketplacePlugin,
 } from "@/lib/plugins/marketplace";
 import {
-  assertMerchantProfileCompleteForChannel,
   createPendingMerchantName,
   isMerchantProfileComplete,
   channelRequiresMerchantProfile,
 } from "@/lib/merchant-profile-completion";
 import { formatAmount } from "@/lib/payments/utils";
-import { normalizeUsdtReceivingAddress } from "@/lib/payments/usdt-address";
 import { getPrismaClient } from "@/lib/prisma";
-import { protectProviderConfigForStorage } from "@/lib/provider-account-config";
 import {
   createMerchantPaymentRefund,
   getMerchantPaymentRefund,
@@ -293,171 +288,6 @@ async function createMerchantApiCredentialRecord(
   }
 
   throw new Error("系统生成 API 凭证失败，请稍后重试。");
-}
-
-async function getMerchantChannelTemplateOrThrow(channelCode: string) {
-  const session = await requireMerchantSession();
-  const template = await getActiveMerchantChannelTemplate(
-    session.merchantUser.merchantId,
-    channelCode,
-  );
-
-  if (!template) {
-    throw new Error("暂不支持该支付通道。");
-  }
-
-  return template;
-}
-
-function getChannelConfigAddress(config: unknown) {
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    return null;
-  }
-
-  const record = config as Record<string, unknown>;
-  const candidate = record.walletAddress ?? record.receivingAddress ?? record.address;
-  return typeof candidate === "string" ? candidate : null;
-}
-
-async function assertUsdtChannelAddressAvailable(input: {
-  channelCode: string;
-  walletAddress: string;
-  excludeAccountId?: string;
-}) {
-  const session = await requireMerchantSession();
-  const template = await getActiveMerchantChannelTemplate(
-    session.merchantUser.merchantId,
-    input.channelCode,
-  );
-
-  if (!template || template.providerKey !== "crypto") {
-    return;
-  }
-
-  const prisma = getPrismaClient();
-  const accounts = await prisma.merchantChannelAccount.findMany({
-    where: {
-      channelCode: input.channelCode,
-      ...(input.excludeAccountId
-        ? {
-            id: {
-              not: input.excludeAccountId,
-            },
-          }
-        : {}),
-    },
-    select: {
-      id: true,
-      displayName: true,
-      merchant: {
-        select: {
-          code: true,
-          name: true,
-        },
-      },
-      config: true,
-    },
-  });
-
-  const duplicate = accounts.find((account) => {
-    const existingAddress = getChannelConfigAddress(account.config);
-
-    if (!existingAddress) {
-      return false;
-    }
-
-    try {
-      return (
-        normalizeUsdtReceivingAddress(input.channelCode, existingAddress) === input.walletAddress
-      );
-    } catch {
-      return false;
-    }
-  });
-
-  if (duplicate) {
-    throw new Error(
-      `该收款地址已被商户 ${duplicate.merchant.name}（${duplicate.merchant.code}）的通道实例 ${duplicate.displayName} 占用，请使用当前商户独立的链上地址。`,
-    );
-  }
-}
-
-async function readMerchantChannelConfig(channelCode: string, formData: FormData) {
-  const template = await getMerchantChannelTemplateOrThrow(channelCode);
-  const config: Record<string, string> = {};
-
-  for (const field of template.fields) {
-    const value = getString(formData, `config_${field.key}`);
-
-    if (field.required && !value) {
-      throw new Error(`${field.label} 不能为空。`);
-    }
-
-    config[field.key] = value;
-  }
-
-  if (template.providerKey === "crypto") {
-    try {
-      config.walletAddress = normalizeUsdtReceivingAddress(template.channelCode, config.walletAddress);
-    } catch {
-      throw new Error(
-        template.channelCode === "usdt.sol"
-          ? "Solana 收款地址格式不正确。"
-          : "EVM 收款地址格式不正确，请检查是否为 0x 开头的正确链上地址。",
-      );
-    }
-  }
-
-  return {
-    template,
-    config,
-  };
-}
-
-async function maybeSetMerchantChannelBindingDefault(input: {
-  merchantId: string;
-  channelCode: string;
-  merchantChannelAccountId: string;
-  shouldSetDefault: boolean;
-  bindingEnabled: boolean;
-}) {
-  const prisma = getPrismaClient();
-  const existingBinding = await prisma.merchantChannelBinding.findUnique({
-    where: {
-      merchantId_channelCode: {
-        merchantId: input.merchantId,
-        channelCode: input.channelCode,
-      },
-    },
-    select: {
-      id: true,
-    },
-  });
-
-  if (!input.shouldSetDefault && existingBinding) {
-    return null;
-  }
-
-  return prisma.merchantChannelBinding.upsert({
-    where: {
-      merchantId_channelCode: {
-        merchantId: input.merchantId,
-        channelCode: input.channelCode,
-      },
-    },
-    update: {
-      enabled: input.bindingEnabled,
-      merchantChannelAccountId: input.merchantChannelAccountId,
-      providerAccountId: null,
-    },
-    create: {
-      merchantId: input.merchantId,
-      channelCode: input.channelCode,
-      enabled: input.bindingEnabled,
-      merchantChannelAccountId: input.merchantChannelAccountId,
-      providerAccountId: null,
-    },
-  });
 }
 
 async function maybeAutoEnableMerchantChannelDraftsAfterProfileCompletion(input: {
@@ -1124,69 +954,9 @@ export async function createMerchantChannelAccountAction(formData: FormData) {
   const redirectTo = getRedirectTo(formData, "/merchant/channels");
 
   try {
-    const channelCode = getRequiredString(formData, "channelCode", "支付通道");
-    const pluginInstalled = await isMerchantPaymentPluginInstalled(
-      session.merchantUser.merchantId,
-      channelCode,
-    );
-
-    if (!pluginInstalled) {
-      throw new Error("请先在插件市场安装当前支付插件后，再创建通道实例。");
-    }
-    const shouldEnable = getBoolean(formData, "enabled");
-    const prisma = getPrismaClient();
-    const merchant = await prisma.merchant.findUnique({
-      where: {
-        id: session.merchantUser.merchantId,
-      },
-      select: {
-        name: true,
-        legalName: true,
-        contactName: true,
-        contactPhone: true,
-        companyRegistrationId: true,
-      },
-    });
-
-    if (!merchant) {
-      throw new Error("商户不存在。");
-    }
-
-    if (shouldEnable) {
-      assertMerchantProfileCompleteForChannel(merchant, channelCode, {
-        prefix: "请先完善以下商户资料后再启用该支付通道：",
-      });
-    }
-
-    const displayName = getRequiredString(formData, "displayName", "通道名称");
-    const { template, config } = await readMerchantChannelConfig(channelCode, formData);
-
-    if (template.providerKey === "crypto") {
-      await assertUsdtChannelAddressAvailable({
-        channelCode: template.channelCode,
-        walletAddress: config.walletAddress,
-      });
-    }
-
-    const account = await prisma.merchantChannelAccount.create({
-      data: {
-        merchantId: session.merchantUser.merchantId,
-        providerKey: template.providerKey,
-        channelCode: template.channelCode,
-        displayName,
-        config: protectProviderConfigForStorage(config) as Prisma.InputJsonValue,
-        callbackToken: generateMerchantChannelCallbackToken(),
-        enabled: shouldEnable,
-        remark: getOptionalString(formData, "remark"),
-      },
-    });
-
-    await maybeSetMerchantChannelBindingDefault({
+    const { account, template } = await createMerchantChannelAccountFromForm({
       merchantId: session.merchantUser.merchantId,
-      channelCode: template.channelCode,
-      merchantChannelAccountId: account.id,
-      shouldSetDefault: getBoolean(formData, "setAsDefault"),
-      bindingEnabled: shouldEnable,
+      formData,
     });
 
     await writeAdminAuditLog({
@@ -1194,7 +964,7 @@ export async function createMerchantChannelAccountAction(formData: FormData) {
       action: "merchant.channel_account.create",
       resourceType: "merchant_channel_account",
       resourceId: account.id,
-      summary: `商户 ${session.merchantUser.merchant.code} 新建 ${template.channelCode} 通道实例 ${displayName}。`,
+      summary: `商户 ${session.merchantUser.merchant.code} 新建 ${template.channelCode} 通道实例 ${account.displayName}。`,
       metadata: {
         channelCode: template.channelCode,
         providerKey: template.providerKey,
@@ -1214,92 +984,11 @@ export async function updateMerchantChannelAccountAction(formData: FormData) {
   const redirectTo = getRedirectTo(formData, "/merchant/channels");
 
   try {
-    const prisma = getPrismaClient();
-    const requestedEnabled = getBoolean(formData, "enabled");
-    const merchant = await prisma.merchant.findUnique({
-      where: {
-        id: session.merchantUser.merchantId,
-      },
-      select: {
-        name: true,
-        legalName: true,
-        contactName: true,
-        contactPhone: true,
-        companyRegistrationId: true,
-      },
-    });
-
-    if (!merchant) {
-      throw new Error("商户不存在。");
-    }
-
-    const id = getRequiredString(formData, "id", "通道实例 ID");
-    const existing = await prisma.merchantChannelAccount.findUnique({
-      where: {
-        id,
-      },
-      select: {
-        id: true,
-        merchantId: true,
-        channelCode: true,
-        displayName: true,
-        config: true,
-        callbackToken: true,
-        enabled: true,
-      },
-    });
-
-    if (!existing || existing.merchantId !== session.merchantUser.merchantId) {
-      throw new Error("指定的支付通道实例不存在。");
-    }
-
-    const pluginInstalled = await isMerchantPaymentPluginInstalled(
-      session.merchantUser.merchantId,
-      existing.channelCode,
-    );
-
-    if (!pluginInstalled) {
-      throw new Error("当前支付插件尚未安装到商户工作台，请先前往插件市场安装。");
-    }
-
-    if (requestedEnabled && !existing.enabled) {
-      assertMerchantProfileCompleteForChannel(merchant, existing.channelCode, {
-        prefix: "请先完善以下商户资料后再启用该支付通道：",
+    const { account, template, previousCallbackToken } =
+      await updateMerchantChannelAccountFromForm({
+        merchantId: session.merchantUser.merchantId,
+        formData,
       });
-    }
-
-    const { template, config } = await readMerchantChannelConfig(existing.channelCode, formData);
-
-    if (template.providerKey === "crypto") {
-      await assertUsdtChannelAddressAvailable({
-        channelCode: template.channelCode,
-        walletAddress: config.walletAddress,
-        excludeAccountId: existing.id,
-      });
-    }
-
-    const account = await prisma.merchantChannelAccount.update({
-      where: {
-        id,
-      },
-      data: {
-        displayName: getRequiredString(formData, "displayName", "通道名称"),
-        config: protectProviderConfigForStorage(
-          config,
-          existing.config,
-        ) as Prisma.InputJsonValue,
-        enabled: requestedEnabled,
-        remark: getOptionalString(formData, "remark"),
-      },
-    });
-
-    await maybeSetMerchantChannelBindingDefault({
-      merchantId: session.merchantUser.merchantId,
-      channelCode: template.channelCode,
-      merchantChannelAccountId: account.id,
-      shouldSetDefault: getBoolean(formData, "setAsDefault"),
-      bindingEnabled: requestedEnabled,
-    });
 
     await writeAdminAuditLog({
       actor: getMerchantAuditActor(session),
@@ -1309,7 +998,7 @@ export async function updateMerchantChannelAccountAction(formData: FormData) {
       summary: `商户 ${session.merchantUser.merchant.code} 更新 ${template.channelCode} 通道实例 ${account.displayName}。`,
       metadata: {
         channelCode: template.channelCode,
-        callbackToken: existing.callbackToken,
+        callbackToken: previousCallbackToken,
         enabled: account.enabled,
       },
     });
