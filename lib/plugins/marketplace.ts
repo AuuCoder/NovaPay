@@ -26,7 +26,19 @@ import { getPrismaClient } from "@/lib/prisma";
 
 const PAYMENT_PLUGIN_KIND: MarketplacePluginKind = "PAYMENT_CHANNEL";
 const BUILTIN_PLUGIN_SOURCE: MarketplacePluginSource = "BUILTIN";
+const OFFICIAL_PLUGIN_SLUG_PREFIX = "novapay.";
 const MARKETPLACE_SYNC_INTERVAL_MS = 60_000;
+
+/**
+ * Official NovaPay plugins live under the reserved `novapay.*` namespace
+ * (mirrors the registry's `isOfficialPluginSlug`). These are first-party
+ * built-in channels shipped with the gateway, so they are exempt from the
+ * paid-plugin license verification when assigning them to a merchant — the
+ * platform already trusts and ships them.
+ */
+function isOfficialPluginSlug(slug: string) {
+  return slug.startsWith(OFFICIAL_PLUGIN_SLUG_PREFIX);
+}
 
 let lastMarketplaceSyncAt = 0;
 let marketplaceSyncPromise: Promise<void> | null = null;
@@ -1216,7 +1228,11 @@ export async function installRemoteMarketplacePluginPackage(slug: string) {
     throw new Error("远程插件缺少下载地址。");
   }
 
-  if (plugin.pricingMode === "PAID" && !plugin.purchasedAt) {
+  if (
+    plugin.pricingMode === "PAID" &&
+    !plugin.purchasedAt &&
+    !isOfficialPluginSlug(plugin.slug)
+  ) {
     throw new Error("当前远程插件为收费插件，请先记录已购状态后再安装。");
   }
 
@@ -1758,7 +1774,16 @@ export async function installMerchantMarketplacePlugin(input: {
   // merchant-scoped license before allowing the merchant to install. Look up
   // the most recent verified purchase record for this plugin and call the
   // Registry's verify endpoint with `merchantId`.
-  if (plugin.pricingMode === "PAID" && plugin.source === "REMOTE_SIGNED") {
+  //
+  // Official first-party `novapay.*` plugins (built-in channels shipped with
+  // the gateway, e.g. USDT on BSC/Base/Solana) are exempt: even if the remote
+  // registry classifies them as PAID, the platform already trusts and ships
+  // them, so no per-merchant license is required to assign them.
+  if (
+    plugin.pricingMode === "PAID" &&
+    plugin.source === "REMOTE_SIGNED" &&
+    !isOfficialPluginSlug(plugin.slug)
+  ) {
     const purchaseRecord = await prisma.pluginPurchaseRecord.findFirst({
       where: {
         pluginSlug: plugin.slug,
