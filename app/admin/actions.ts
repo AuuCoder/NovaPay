@@ -26,12 +26,14 @@ import {
 import {
   getMarketplacePluginUsageBySlug,
   getMarketplacePluginSafetyState,
+  installMerchantMarketplacePlugin,
   installRemoteMarketplacePluginPackage,
   purchaseAndIssueLicense,
   recordMarketplacePluginPurchase,
   setMarketplacePluginEnabledState,
   setMarketplacePluginInstalledState,
   syncBuiltinMarketplacePlugins,
+  uninstallMerchantMarketplacePlugin,
 } from "@/lib/plugins/marketplace";
 import { fetchRemoteRegistrySnapshot } from "@/lib/plugins/remote-registry";
 import { hashPassword } from "@/lib/password";
@@ -734,6 +736,127 @@ export async function updateMerchantChannelAccountAsAdminAction(formData: FormDa
   }
 
   redirect(withMessage(redirectTo, "success", "支付通道实例已更新。"));
+}
+
+async function resolvePaymentPluginSlugByChannelCode(channelCode: string) {
+  const plugin = await getPrismaClient().marketplacePlugin.findFirst({
+    where: {
+      channelCode,
+      kind: "PAYMENT_CHANNEL",
+      installed: true,
+      enabled: true,
+    },
+    orderBy: [{ source: "asc" }, { createdAt: "asc" }],
+    select: { slug: true },
+  });
+
+  if (!plugin) {
+    throw new Error("该支付通道当前没有可安装的插件。");
+  }
+
+  return plugin.slug;
+}
+
+export async function installMerchantPluginAsAdminAction(formData: FormData) {
+  const session = await requireAdminPermission("merchant:write");
+  const merchantId = getString(formData, "merchantId");
+  const redirectTo = getRedirectTo(
+    formData,
+    merchantId ? `/admin/merchants/${merchantId}` : "/admin/merchants",
+  );
+
+  try {
+    if (!merchantId) {
+      throw new Error("商户 ID 不能为空。");
+    }
+
+    const channelCode = getRequiredString(formData, "channelCode", "支付通道");
+    const prisma = getPrismaClient();
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: { id: true, code: true },
+    });
+
+    if (!merchant) {
+      throw new Error("商户不存在。");
+    }
+
+    const slug = await resolvePaymentPluginSlugByChannelCode(channelCode);
+    const plugin = await installMerchantMarketplacePlugin({
+      merchantId,
+      slug,
+    });
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "admin.merchant.plugin.install",
+      resourceType: "merchant_plugin",
+      resourceId: `${merchant.code}:${plugin.slug}`,
+      summary: `管理员为商户 ${merchant.code} 安装支付插件 ${plugin.slug}。`,
+      metadata: {
+        merchantId,
+        merchantCode: merchant.code,
+        pluginSlug: plugin.slug,
+        channelCode: plugin.channelCode,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "支付插件已安装到该商户工作台。"));
+}
+
+export async function uninstallMerchantPluginAsAdminAction(formData: FormData) {
+  const session = await requireAdminPermission("merchant:write");
+  const merchantId = getString(formData, "merchantId");
+  const redirectTo = getRedirectTo(
+    formData,
+    merchantId ? `/admin/merchants/${merchantId}` : "/admin/merchants",
+  );
+
+  try {
+    if (!merchantId) {
+      throw new Error("商户 ID 不能为空。");
+    }
+
+    const channelCode = getRequiredString(formData, "channelCode", "支付通道");
+    const prisma = getPrismaClient();
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: { id: true, code: true },
+    });
+
+    if (!merchant) {
+      throw new Error("商户不存在。");
+    }
+
+    const slug = await resolvePaymentPluginSlugByChannelCode(channelCode);
+    const plugin = await uninstallMerchantMarketplacePlugin({
+      merchantId,
+      slug,
+    });
+
+    await writeAdminAuditLog({
+      actor: getAuditActor(session),
+      action: "admin.merchant.plugin.uninstall",
+      resourceType: "merchant_plugin",
+      resourceId: `${merchant.code}:${plugin.slug}`,
+      summary: `管理员为商户 ${merchant.code} 卸载支付插件 ${plugin.slug}。`,
+      metadata: {
+        merchantId,
+        merchantCode: merchant.code,
+        pluginSlug: plugin.slug,
+        channelCode: plugin.channelCode,
+      },
+    });
+    revalidateAdminPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "支付插件已从该商户工作台卸载。"));
 }
 
 export async function updateMerchantUserAction(formData: FormData) {

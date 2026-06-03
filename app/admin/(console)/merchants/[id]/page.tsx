@@ -5,6 +5,8 @@ import {
   createMerchantApiCredentialAction,
   createMerchantChannelAccountAsAdminAction,
   updateMerchantChannelAccountAsAdminAction,
+  installMerchantPluginAsAdminAction,
+  uninstallMerchantPluginAsAdminAction,
   reviewMerchantAction,
   updateMerchantAction,
   updateMerchantUserAction,
@@ -45,6 +47,7 @@ import {
   getMerchantEditableName,
   getMerchantProfileMissingFields,
 } from "@/lib/merchant-profile-completion";
+import { listInstalledMerchantChannelTemplates } from "@/lib/plugins/marketplace";
 import { getPrismaClient } from "@/lib/prisma";
 import { hasPermission } from "@/lib/rbac";
 import { maskStoredSecret } from "@/lib/secret-box";
@@ -167,6 +170,10 @@ export default async function MerchantDetailPage({
       : "0%";
   const canManageChannels = hasPermission(session.adminUser.role, "merchant:write");
   const channelTemplates = await getActiveMerchantChannelTemplates(merchant.id, locale);
+  const allChannelTemplates = await listInstalledMerchantChannelTemplates(locale);
+  const installedChannelCodes = new Set(
+    channelTemplates.map((template) => template.channelCode),
+  );
   const profileMissingFields = getMerchantProfileMissingFields(merchant, locale);
   const hasProfileGaps = profileMissingFields.length > 0;
   const accountsByChannel = new Map<string, typeof merchant.channelAccounts>();
@@ -312,6 +319,15 @@ export default async function MerchantDetailPage({
           channelReadonly: "This account can view channel instances but cannot create or update them.",
           required: "Required",
           optional: "Optional",
+          pluginInstallTitle: "Installed payment plugins for this merchant",
+          pluginInstallDesc:
+            "A payment channel can only be configured after its plugin is installed for this merchant. Assign plugins here on behalf of merchants without a login account (such as the platform official bridge merchant).",
+          pluginInstalledLabel: "Installed",
+          pluginNotInstalledLabel: "Not installed",
+          pluginInstallButton: "Install for this merchant",
+          pluginUninstallButton: "Uninstall",
+          pluginAllInstalled: "All available payment plugins are already installed for this merchant.",
+          pluginNoneAvailable: "No platform payment plugins are available to install yet.",
           credentialsEyebrow: "API Credentials",
           credentialsTitle: "Merchant API credentials",
           credentialsDescription:
@@ -471,6 +487,15 @@ export default async function MerchantDetailPage({
           channelReadonly: "当前账号只能查看通道实例，不能新增或更新。",
           required: "必填",
           optional: "选填",
+          pluginInstallTitle: "该商户已安装的支付插件",
+          pluginInstallDesc:
+            "支付通道只有在对应插件安装到该商户后才能配置。这里可由管理员代没有登录账号的商户（例如平台官方桥接商户）安装插件。",
+          pluginInstalledLabel: "已安装",
+          pluginNotInstalledLabel: "未安装",
+          pluginInstallButton: "为该商户安装",
+          pluginUninstallButton: "卸载",
+          pluginAllInstalled: "平台可用的支付插件都已安装到该商户。",
+          pluginNoneAvailable: "当前平台还没有可安装的支付插件。",
           credentialsEyebrow: "API Credentials",
           credentialsTitle: "商户 API 凭证",
           credentialsDescription:
@@ -997,24 +1022,83 @@ export default async function MerchantDetailPage({
           <div className="mt-6 rounded-[1.25rem] border border-line bg-white/75 p-5 text-sm leading-7 text-muted">
             {content.channelReadonly}
           </div>
-        ) : channelTemplates.length === 0 ? (
-          <div className="mt-6 rounded-[1.25rem] border border-dashed border-line p-6 text-sm leading-7 text-muted">
-            {content.channelNoTemplates}
-          </div>
         ) : (
-          <div className="mt-6 grid gap-6">
-            <h3 className="text-lg font-semibold text-foreground">{content.channelCreateTitle}</h3>
-            <div className="grid gap-6 xl:grid-cols-2">
-              {channelTemplates.map((template) => {
-                const blockedByProfile =
-                  template.requiresMerchantProfileCompletion && hasProfileGaps;
-                const hasDefault = defaultAccountIdByChannel.has(template.channelCode);
+          <>
+            <div className="mt-6 rounded-[1.5rem] border border-line bg-white/65 p-5">
+              <h3 className="text-lg font-semibold text-foreground">{content.pluginInstallTitle}</h3>
+              <p className="mt-2 text-sm leading-7 text-muted">{content.pluginInstallDesc}</p>
 
-                return (
-                  <form
-                    key={template.channelCode}
-                    action={createMerchantChannelAccountAsAdminAction}
-                    className="rounded-[1.5rem] border border-line bg-white/75 p-5"
+              {allChannelTemplates.length === 0 ? (
+                <div className="mt-4 rounded-[1.25rem] border border-dashed border-line p-5 text-sm leading-7 text-muted">
+                  {content.pluginNoneAvailable}
+                </div>
+              ) : (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {allChannelTemplates.map((template) => {
+                    const installed = installedChannelCodes.has(template.channelCode);
+                    const channelInUse = (accountsByChannel.get(template.channelCode)?.length ?? 0) > 0;
+
+                    return (
+                      <div
+                        key={template.channelCode}
+                        className="flex items-start justify-between gap-3 rounded-[1.25rem] border border-line bg-white/80 p-4"
+                      >
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">{template.title}</p>
+                          <p className="mt-1 font-mono text-xs text-muted">{template.channelCode}</p>
+                          <StatusBadge tone={installed ? "success" : "neutral"}>
+                            {installed ? content.pluginInstalledLabel : content.pluginNotInstalledLabel}
+                          </StatusBadge>
+                        </div>
+                        {installed ? (
+                          channelInUse ? null : (
+                            <form action={uninstallMerchantPluginAsAdminAction}>
+                              <input type="hidden" name="merchantId" value={merchant.id} />
+                              <input type="hidden" name="redirectTo" value={`/admin/merchants/${merchant.id}`} />
+                              <input type="hidden" name="channelCode" value={template.channelCode} />
+                              <button
+                                type="submit"
+                                className="rounded-xl border border-line bg-white px-3 py-2 text-xs font-medium text-foreground"
+                              >
+                                {content.pluginUninstallButton}
+                              </button>
+                            </form>
+                          )
+                        ) : (
+                          <form action={installMerchantPluginAsAdminAction}>
+                            <input type="hidden" name="merchantId" value={merchant.id} />
+                            <input type="hidden" name="redirectTo" value={`/admin/merchants/${merchant.id}`} />
+                            <input type="hidden" name="channelCode" value={template.channelCode} />
+                            <button type="submit" className={subtleButtonClass}>
+                              {content.pluginInstallButton}
+                            </button>
+                          </form>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {channelTemplates.length === 0 ? (
+              <div className="mt-6 rounded-[1.25rem] border border-dashed border-line p-6 text-sm leading-7 text-muted">
+                {content.channelNoTemplates}
+              </div>
+            ) : (
+              <div className="mt-6 grid gap-6">
+                <h3 className="text-lg font-semibold text-foreground">{content.channelCreateTitle}</h3>
+                <div className="grid gap-6 xl:grid-cols-2">
+                  {channelTemplates.map((template) => {
+                    const blockedByProfile =
+                      template.requiresMerchantProfileCompletion && hasProfileGaps;
+                    const hasDefault = defaultAccountIdByChannel.has(template.channelCode);
+
+                    return (
+                      <form
+                        key={template.channelCode}
+                        action={createMerchantChannelAccountAsAdminAction}
+                        className="rounded-[1.5rem] border border-line bg-white/75 p-5"
                   >
                     <input type="hidden" name="merchantId" value={merchant.id} />
                     <input type="hidden" name="redirectTo" value={`/admin/merchants/${merchant.id}`} />
@@ -1100,8 +1184,10 @@ export default async function MerchantDetailPage({
                   </form>
                 );
               })}
-            </div>
-          </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {merchant.channelAccounts.length === 0 ? (
