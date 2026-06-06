@@ -709,17 +709,13 @@ async function createWxpayRefund(
   assertOutTradeNo(input.orderId);
   assertOutRefundNo(input.refundId);
 
-  if (!config.notifyUrl) {
-    throw new Error("Merchant callback route is missing for WeChat Pay channel instance.");
-  }
-
   const payload = {
     ...(input.gatewayOrderId
       ? { transaction_id: input.gatewayOrderId }
       : { out_trade_no: input.orderId }),
     out_refund_no: input.refundId,
     reason: input.reason ?? undefined,
-    notify_url: config.notifyUrl,
+    ...(config.notifyUrl ? { notify_url: config.notifyUrl } : {}),
     amount: {
       refund: toAmountFen(input.refundAmount),
       total: toAmountFen(input.amount),
