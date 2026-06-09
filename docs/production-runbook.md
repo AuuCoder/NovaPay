@@ -209,7 +209,7 @@ If this launch also enables on-chain USDT, run through this section.
 Fill in (via `/admin/system-config` or the `SystemConfig` table) for every enabled chain:
 
 - BSC: `USDT_BSC_RPC_URL`, `USDT_BSC_TOKEN_CONTRACT`
-- Base: `USDT_BASE_RPC_URL`, `USDT_BASE_TOKEN_CONTRACT`
+- Polygon: `USDT_BASE_RPC_URL`, `USDT_BASE_TOKEN_CONTRACT`
 - Solana: `USDT_SOL_RPC_URL`, `USDT_SOL_MINT`
 
 Optional tuning:

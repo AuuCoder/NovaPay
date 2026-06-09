@@ -63,7 +63,7 @@ const publishablePlugins: PublishablePluginConfig[] = [
     modulePath: path.join(ROOT, "lib", "payments", "plugins", "usdt-onchain.ts"),
     exportName: "usdtBasePlugin",
     pricingMode: "FREE",
-    customRuntimeSource: createUsdtRuntimeSource(usdtBasePlugin, "Base"),
+    customRuntimeSource: createUsdtRuntimeSource(usdtBasePlugin, "Polygon"),
   },
   {
     plugin: usdtSolPlugin,

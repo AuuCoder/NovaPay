@@ -33,10 +33,10 @@ interface UsdtChainDefinition {
 const CHAIN_DEFINITIONS: Record<UsdtOnchainChannelCode, UsdtChainDefinition> = {
   "usdt.base": {
     channelCode: "usdt.base",
-    displayName: "USDT · Base",
-    description: "Use a Base-compatible wallet to transfer the exact USDT amount to the configured receiving address.",
-    networkLabel: "Base",
-    qrHint: "Scan or copy the address, then transfer the exact USDT amount on Base.",
+    displayName: "USDT · Polygon",
+    description: "Use a Polygon-compatible wallet to transfer the exact USDT amount to the configured receiving address.",
+    networkLabel: "Polygon",
+    qrHint: "Scan or copy the address, then transfer the exact USDT amount on Polygon.",
   },
   "usdt.bsc": {
     channelCode: "usdt.bsc",

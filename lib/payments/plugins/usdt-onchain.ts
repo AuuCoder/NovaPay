@@ -113,22 +113,22 @@ export const usdtBscPlugin = createUsdtOnchainPlugin({
 export const usdtBasePlugin = createUsdtOnchainPlugin({
   channelCode: "usdt.base",
   title: {
-    zh: "USDT · Base",
-    en: "USDT on Base",
+    zh: "USDT · Polygon",
+    en: "USDT on Polygon",
   },
   networkLabel: {
-    zh: "Base",
-    en: "Base",
+    zh: "Polygon",
+    en: "Polygon",
   },
   walletPlaceholder: "0x...",
   addressLabelPlaceholder: {
-    zh: "Base 结算钱包",
-    en: "Base settlement wallet",
+    zh: "Polygon 结算钱包",
+    en: "Polygon settlement wallet",
   },
   marketplace: {
     slug: "novapay.usdt-base",
     packageName: "@novapay/plugin-usdt-base",
-    version: "1.0.0",
+    version: "1.0.3",
   },
   provider: usdtBaseProvider,
 });

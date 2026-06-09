@@ -286,10 +286,10 @@ async function main() {
       pluginSlug: "novapay.usdt-base",
       channelCode: "usdt.base",
       providerKey: "crypto",
-      displayName: "USDT Base Remote Plugin",
+      displayName: "USDT Polygon Remote Plugin",
       accountConfig: {
         walletAddress: "0x1111111111111111111111111111111111111111",
-        addressLabel: "Base settlement wallet",
+        addressLabel: "Polygon settlement wallet",
       },
       amount: "88.00",
       subject: "Remote plugin USDT checkout validation",

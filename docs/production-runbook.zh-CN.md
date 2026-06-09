@@ -211,7 +211,7 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 按启用的链补齐系统配置（`/admin/system-config` 页面或直接 `SystemConfig` 表）：
 
 - BSC：`USDT_BSC_RPC_URL`、`USDT_BSC_TOKEN_CONTRACT`
-- Base：`USDT_BASE_RPC_URL`、`USDT_BASE_TOKEN_CONTRACT`
+- Polygon：`USDT_BASE_RPC_URL`、`USDT_BASE_TOKEN_CONTRACT`
 - Solana：`USDT_SOL_RPC_URL`、`USDT_SOL_MINT`
 
 可选调优：

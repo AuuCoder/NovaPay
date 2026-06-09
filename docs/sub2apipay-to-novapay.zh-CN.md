@@ -47,7 +47,7 @@
 | 商户回调投递与重试 | `lib/callbacks/service.ts` + `scripts/callback-retry-worker.ts` | ✅ 已实现（指数退避、`callbacks-worker` 进程） |
 | 退款流程 | `lib/refunds/service.ts` + `app/api/payment-orders/[orderReference]/refunds` | ✅ 已实现 |
 | 财务流水 / 余额快照 / 结算 | `lib/finance/*` + `scripts/finance-worker.ts` | ✅ 已实现（`finance-worker` 进程） |
-| 链上 USDT 到账匹配 | `lib/payments/onchain/*` + `scripts/onchain-worker.ts` | ✅ 已实现（BSC / Base / Solana） |
+| 链上 USDT 到账匹配 | `lib/payments/onchain/*` + `scripts/onchain-worker.ts` | ✅ 已实现（BSC / Polygon / Solana） |
 | 多支付方式扩展 | 插件市场（`apps/registry/`） | ✅ 当时只想着写死 `wxpay.native`；现在演进成独立 Registry，第三方插件可以无需改网关代码动态接入 |
 
 ---
@@ -75,7 +75,7 @@
 
 **4. USDT 链上支付**
 
-早期没考虑这条线。后来根据真实业务需求增加了 BSC / Base / Solana 三条链，包含锁价、精确金额分配、链上 worker 扫描配单。
+早期没考虑这条线。后来根据真实业务需求增加了 BSC / Polygon / Solana 三条链，包含锁价、精确金额分配、链上 worker 扫描配单。
 
 ---
 

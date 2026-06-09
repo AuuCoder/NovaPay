@@ -13,7 +13,7 @@ It does not act as a single pooled platform wallet. Each merchant manages its ow
 - **Multi-merchant payment gateway** — each merchant runs on its own credentials and receiving accounts; the platform never holds shared collection capability on their behalf.
 - **Plugin marketplace (`apps/registry`)** — a separate Next.js service that catalogs free and paid payment plugins, signs bundles with Ed25519, issues per-instance licenses (JWS), and ships its own admin/developer console.
 - **Sandboxed plugin runtime** — third-party plugins load through a `worker_threads` sandbox with a static scan against `child_process`, `eval`, file-system writes, and other escape hatches.
-- **Hosted checkout** — branded payment pages for Alipay, WeChat Pay Native, and USDT (BSC / Base / Solana) with countdowns, status polling, and quote-locked payable amounts.
+- **Hosted checkout** — branded payment pages for Alipay, WeChat Pay Native, and USDT (BSC / Polygon / Solana) with countdowns, status polling, and quote-locked payable amounts.
 - **Operational tooling** — admin dashboards, merchant self-service, finance ledgers, refund flows, callback retry workers, on-chain matching workers, audit logs, and OpenAPI docs.
 - **Docker-native deployment** — one `docker compose up -d` command launches the main app, plugin registry, three workers, Postgres, and MinIO together.
 - **Beijing-time consistent UI** — every datetime in the admin/merchant consoles and hosted checkout pages renders in `Asia/Shanghai`, regardless of server timezone.
@@ -44,7 +44,7 @@ It does not act as a single pooled platform wallet. Each merchant manages its ow
        Background workers:
        ─ callbacks-worker     merchant business callback retries
        ─ finance-worker       ledger sync, balance snapshots, settlements
-       ─ onchain-worker       USDT BSC / Base / Solana deposit matching
+       ─ onchain-worker       USDT BSC / Polygon / Solana deposit matching
 ```
 
 | Component | Role | Storage |
@@ -118,7 +118,7 @@ Put a reverse proxy (Nginx / Caddy / Cloudflare) in front of `:3000` and `:3100`
 | `alipay.page` | Alipay | Page redirect |
 | `wxpay.native` | WeChat Pay | Native QR code |
 | `usdt.bsc` | USDT on BNB Smart Chain | On-chain transfer |
-| `usdt.base` | USDT on Base | On-chain transfer |
+| `usdt.base` | USDT on Polygon | On-chain transfer |
 | `usdt.sol` | USDT on Solana | On-chain transfer |
 
 Channels live as plugins. The plugin marketplace ships them as official `novapay.*` packages; third-party plugins can extend the set without modifying gateway code.

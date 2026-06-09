@@ -94,10 +94,10 @@ function getOnchainSystemConfigSections(locale: Locale): SystemConfigSectionDefi
     },
     {
       id: "base",
-      title: isEn ? "Base Monitor" : "Base 链监控",
+      title: isEn ? "Polygon Monitor" : "Polygon 链监控",
       description: isEn
-        ? "Configure the Base RPC endpoint and USDT contract used by the shared on-chain worker."
-        : "配置共享链上 worker 使用的 Base RPC 节点和 USDT 合约地址。",
+        ? "Configure the Polygon RPC endpoint and USDT contract used by the shared on-chain worker."
+        : "配置共享链上 worker 使用的 Polygon RPC 节点和 USDT 合约地址。",
       note: isEn
         ? "RPC URL and token contract are required before enabling `usdt.base` for real monitoring."
         : "正式启用 `usdt.base` 自动监控前，RPC URL 和 Token 合约地址必须先配置。",
@@ -106,35 +106,35 @@ function getOnchainSystemConfigSections(locale: Locale): SystemConfigSectionDefi
         {
           key: "USDT_BASE_RPC_URL",
           group: "onchain",
-          label: isEn ? "Base RPC URL" : "Base RPC 地址",
+          label: isEn ? "Polygon RPC URL" : "Polygon RPC 地址",
           hint: isEn
-            ? "Use a stable HTTPS RPC endpoint for Base."
-            : "填写稳定可用的 Base HTTPS RPC 节点。",
+            ? "Use a stable HTTPS RPC endpoint for Polygon."
+            : "填写稳定可用的 Polygon HTTPS RPC 节点。",
           kind: "url",
           required: true,
-          placeholder: "https://base.example-rpc.com",
+          placeholder: "https://polygon-rpc.com",
         },
         {
           key: "USDT_BASE_TOKEN_CONTRACT",
           group: "onchain",
-          label: isEn ? "Base USDT Contract" : "Base USDT 合约地址",
+          label: isEn ? "Polygon USDT Contract" : "Polygon USDT 合约地址",
           hint: isEn
             ? "The worker listens to Transfer logs from this contract."
             : "链上 worker 会从这个合约监听 Transfer 事件。",
           kind: "text",
           required: true,
-          placeholder: "0x...",
+          placeholder: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
         },
         {
           key: "USDT_BASE_CONFIRMATIONS",
           group: "onchain",
-          label: isEn ? "Base Confirmations" : "Base 确认数",
+          label: isEn ? "Polygon Confirmations" : "Polygon 确认数",
           hint: isEn
             ? "Leave empty to use the default of 12."
             : "留空则使用默认值 12。",
           kind: "integer",
           defaultValue: "12",
-          placeholder: "12",
+          placeholder: "128",
         },
       ],
     },

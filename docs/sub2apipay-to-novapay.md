@@ -45,7 +45,7 @@ Each merchant manages their own credentials, IP allowlist, and callback URLs in 
 | Merchant callback delivery + retries | `lib/callbacks/service.ts` + `scripts/callback-retry-worker.ts` | ✅ Implemented (exponential backoff, `callbacks-worker` process) |
 | Refund flow | `lib/refunds/service.ts` + `app/api/payment-orders/[orderReference]/refunds` | ✅ Implemented |
 | Finance ledger / balance snapshots / settlements | `lib/finance/*` + `scripts/finance-worker.ts` | ✅ Implemented (`finance-worker` process) |
-| On-chain USDT matching | `lib/payments/onchain/*` + `scripts/onchain-worker.ts` | ✅ Implemented (BSC / Base / Solana) |
+| On-chain USDT matching | `lib/payments/onchain/*` + `scripts/onchain-worker.ts` | ✅ Implemented (BSC / Polygon / Solana) |
 | Multi payment-method extension | The plugin marketplace (`apps/registry/`) | ✅ The original plan only hard-coded `wxpay.native`; this evolved into an independent registry where third-party plugins can extend channels without modifying the gateway |
 
 ---
@@ -73,7 +73,7 @@ The original plan included "single channel + multiple accounts + per-account lim
 
 **4. USDT on-chain support was never in the original plan**
 
-Added later in response to real demand. Spans BSC / Base / Solana, with locked quotes, exact-amount allocation, and on-chain matching workers.
+Added later in response to real demand. Spans BSC / Polygon / Solana, with locked quotes, exact-amount allocation, and on-chain matching workers.
 
 ---
 

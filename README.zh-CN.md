@@ -13,7 +13,7 @@ NovaPay 是一个面向正式业务场景的多商户支付网关，自带托管
 - **多商户支付网关** —— 每个商户跑在自己的凭证和收款账户上，平台不代持商户收款能力。
 - **插件市场（`apps/registry`）** —— 独立的 Next.js 服务，包含免费/收费插件目录、Ed25519 包签名、按实例签发的 JWS 许可证、自带管理员/开发者后台。
 - **沙箱化插件运行时** —— 第三方插件通过 `worker_threads` 沙箱加载，并对 `child_process`、`eval`、文件系统写入等绕过手段做静态扫描。
-- **托管收银台** —— 支付宝、微信 Native、USDT（BSC / Base / Solana）的品牌化支付页，带倒计时、状态轮询、锁价应付金额。
+- **托管收银台** —— 支付宝、微信 Native、USDT（BSC / Polygon / Solana）的品牌化支付页，带倒计时、状态轮询、锁价应付金额。
 - **运营工具链** —— 管理员看板、商户自助门户、财务流水、退款流程、回调重试 worker、链上匹配 worker、审计日志、OpenAPI 文档。
 - **Docker 原生部署** —— 一条 `docker compose up -d` 起主站、插件市场、三个 worker、Postgres、MinIO。
 - **统一北京时间** —— 后台和托管收银台所有时间都按 `Asia/Shanghai` 显示，跟服务器时区无关。
@@ -44,7 +44,7 @@ NovaPay 是一个面向正式业务场景的多商户支付网关，自带托管
        后台 worker：
        ─ callbacks-worker     商户业务回调重试
        ─ finance-worker       流水同步、余额快照、结算
-       ─ onchain-worker       USDT BSC / Base / Solana 到账匹配
+       ─ onchain-worker       USDT BSC / Polygon / Solana 到账匹配
 ```
 
 | 组件 | 职责 | 存储 |
@@ -118,7 +118,7 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 | `alipay.page` | 支付宝 | 网页跳转 |
 | `wxpay.native` | 微信支付 | Native 二维码 |
 | `usdt.bsc` | USDT on BNB Smart Chain | 链上转账 |
-| `usdt.base` | USDT on Base | 链上转账 |
+| `usdt.base` | USDT on Polygon | 链上转账 |
 | `usdt.sol` | USDT on Solana | 链上转账 |
 
 通道以插件形式存在。市场内置 `novapay.*` 官方包；第三方插件可在不修改网关代码的前提下扩展通道。
