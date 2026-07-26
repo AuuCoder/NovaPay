@@ -10,6 +10,7 @@ RUN npm ci
 COPY . .
 
 RUN npm run db:generate
+RUN npx prisma generate --config apps/registry/prisma.config.ts
 RUN npm run build
 
 ENV NODE_ENV=production
