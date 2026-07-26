@@ -27,12 +27,18 @@
     "callbacks:worker": "tsx scripts/callback-retry-worker.ts",
     "finance:sync-once": "tsx scripts/finance-worker.ts --once",
     "finance:worker": "tsx scripts/finance-worker.ts",
+    "payment-monitor:worker": "tsx scripts/payment-monitor-worker.ts",
+    "ctf-bill-capture:worker": "tsx scripts/ctf-bill-capture-worker.ts",
+    "ctf:post-bill": "node --import tsx scripts/post-ctf-bill.ts",
     "onchain:sync-once": "tsx scripts/onchain-worker.ts --once",
     "onchain:worker": "tsx scripts/onchain-worker.ts",
     "plugins:repair-bundles": "tsx scripts/repair-installed-plugin-bundles.ts",
+    "plugins:rename-bill-capture-slugs": "tsx scripts/rename-bill-capture-plugin-slugs.ts",
     "env:check:prod": "NODE_ENV=production node --import tsx scripts/check-production-env.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1073.0",
+    "@aws-sdk/s3-request-presigner": "^3.1073.0",
     "@prisma/adapter-pg": "7.7.0",
     "@prisma/client": "7.7.0",
     "next": "16.2.3",

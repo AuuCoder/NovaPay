@@ -9,6 +9,10 @@ import {
   usdtSolPlugin,
 } from "@/lib/payments/plugins/usdt-onchain";
 import { wxpayNativePlugin } from "@/lib/payments/plugins/wxpay-native";
+import {
+  ctfAlipayBillCapturePlugin,
+  ctfWxpayBillCapturePlugin,
+} from "@/lib/payments/plugins/ctf-bill-capture";
 import type { PaymentPluginDefinition } from "@/lib/payments/plugins/types";
 
 interface PublishablePluginConfig {
@@ -30,9 +34,16 @@ interface PublishablePluginConfig {
 
 const ROOT = process.cwd();
 const REGISTRY_BASE_URL = process.env.REGISTRY_BASE_URL?.trim() || "http://localhost:3100";
+const REGISTRY_DEVELOPER_TOKEN = process.env.REGISTRY_DEVELOPER_TOKEN?.trim() || "";
 const OUTPUT_DIR = path.join(ROOT, "artifacts", "remote-plugin-bundles");
 const TEMP_BUILD_ROOT = path.join(ROOT, ".tmp");
 const VERSION_OVERRIDE = process.env.REMOTE_PLUGIN_VERSION_OVERRIDE?.trim() || null;
+const REQUESTED_SLUGS = new Set(
+  (process.env.REMOTE_PLUGIN_SLUGS?.trim() || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean),
+);
 
 const publishablePlugins: PublishablePluginConfig[] = [
   {
@@ -71,6 +82,18 @@ const publishablePlugins: PublishablePluginConfig[] = [
     exportName: "usdtSolPlugin",
     pricingMode: "FREE",
     customRuntimeSource: createUsdtRuntimeSource(usdtSolPlugin, "Solana"),
+  },
+  {
+    plugin: ctfAlipayBillCapturePlugin,
+    modulePath: path.join(ROOT, "lib", "payments", "plugins", "ctf-bill-capture.ts"),
+    exportName: "ctfAlipayBillCapturePlugin",
+    pricingMode: "FREE",
+  },
+  {
+    plugin: ctfWxpayBillCapturePlugin,
+    modulePath: path.join(ROOT, "lib", "payments", "plugins", "ctf-bill-capture.ts"),
+    exportName: "ctfWxpayBillCapturePlugin",
+    pricingMode: "FREE",
   },
 ];
 
@@ -411,6 +434,11 @@ async function uploadBundle(config: PublishablePluginConfig, rawBundle: string) 
     `${REGISTRY_BASE_URL}/api/developer/plugins/${config.plugin.marketplace.slug}/versions`,
     {
       method: "POST",
+      headers: REGISTRY_DEVELOPER_TOKEN
+        ? {
+            Authorization: `Bearer ${REGISTRY_DEVELOPER_TOKEN}`,
+          }
+        : undefined,
       body: formData,
     },
   );
@@ -429,11 +457,15 @@ async function main() {
   await mkdir(OUTPUT_DIR, { recursive: true });
   await mkdir(TEMP_BUILD_ROOT, { recursive: true });
   const tempDir = await mkdtemp(path.join(TEMP_BUILD_ROOT, "novapay-remote-plugin-build-"));
+  const selectedPlugins =
+    REQUESTED_SLUGS.size > 0
+      ? publishablePlugins.filter((item) => REQUESTED_SLUGS.has(item.plugin.marketplace.slug))
+      : publishablePlugins;
 
   try {
     const results: Array<Record<string, unknown>> = [];
 
-    for (const config of publishablePlugins) {
+    for (const config of selectedPlugins) {
       const runtimeJs = await bundleRuntime(config, tempDir);
       const manifest = buildManifest(config.plugin);
       const bundle = {

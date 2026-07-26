@@ -128,9 +128,21 @@ export function parsePluginPackageManifest(
       ? raw.manifestVersion
       : 1;
   const runtimeEntrypoint = asOptionalString(raw.runtimeEntrypoint);
+  const manifestDir = path.dirname(manifestPath);
   const runtimePath = runtimeEntrypoint
-    ? path.resolve(path.dirname(manifestPath), runtimeEntrypoint)
+    ? path.resolve(manifestDir, runtimeEntrypoint)
     : null;
+
+  // The runtime entrypoint is later imported and executed, so it must stay
+  // inside the plugin package directory. Reject absolute paths or `..` escapes.
+  if (runtimePath) {
+    const resolvedDir = path.resolve(manifestDir);
+    if (runtimePath !== resolvedDir && !runtimePath.startsWith(resolvedDir + path.sep)) {
+      throw new Error(
+        `runtimeEntrypoint must stay within the plugin package directory: ${runtimeEntrypoint}`,
+      );
+    }
+  }
 
   return {
     slug: asNonEmptyString(raw.slug, "slug"),

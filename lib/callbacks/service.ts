@@ -5,10 +5,17 @@ import {
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 import { AppError } from "@/lib/errors";
+import {
+  buildEasyPayCallbackRequest,
+  getEasyPayNotifyUrl,
+  type CallbackRequestPlan,
+} from "@/lib/easypay/notify";
+import { isEasyPayOrder } from "@/lib/easypay/order-marker";
 import { createMerchantCallbackSignature } from "@/lib/merchants/signature";
 import { getPrismaClient } from "@/lib/prisma";
 import { revealStoredSecret } from "@/lib/secret-box";
 import { getSystemConfig } from "@/lib/system-config";
+import { redactCallbackUrl, safeFetch } from "@/lib/network/safe-fetch";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_INTERVAL_SECONDS = 60;
@@ -133,10 +140,16 @@ async function claimMerchantCallbackDispatch(input: {
 
 function resolveCallbackTarget(order: {
   callbackUrl: string | null;
+  metadata: unknown;
   merchant: { callbackBase: string | null; callbackEnabled: boolean };
 }) {
   if (!order.merchant.callbackEnabled) {
     return null;
+  }
+
+  // 易支付订单:回调目标是下单时落库的 notify_url(易支付协议格式)。
+  if (isEasyPayOrder(order.metadata)) {
+    return getEasyPayNotifyUrl(order.metadata);
   }
 
   return order.callbackUrl ?? order.merchant.callbackBase;
@@ -286,40 +299,76 @@ export async function dispatchMerchantCallback(orderId: string, force = false) {
     };
   }
 
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    "x-novapay-event": "payment.order.updated",
-    "x-novapay-order-id": order.id,
-    "x-novapay-merchant-code": order.merchant.code,
-    "x-novapay-timestamp": timestamp,
-  };
+  const isEasyPay = isEasyPayOrder(order.metadata);
 
-  const notifySecret = revealStoredSecret(order.merchant.notifySecret);
+  let plan: CallbackRequestPlan;
 
-  if (notifySecret) {
-    headers["x-novapay-signature"] = createMerchantCallbackSignature(
-      notifySecret,
-      timestamp,
-      requestBody,
-    );
+  if (isEasyPay) {
+    const easyPayPlan = await buildEasyPayCallbackRequest(order, targetUrl);
+
+    if (!easyPayPlan) {
+      // 非成功状态 / 凭证缺失 → 易支付无可回调内容,标记为无需回调。
+      await prisma.paymentOrder.update({
+        where: { id: order.id },
+        data: {
+          callbackStatus: CallbackDeliveryStatus.NOT_REQUIRED,
+          nextCallbackAt: null,
+        },
+      });
+
+      return {
+        delivered: false,
+        skipped: true,
+        reason: "easypay_callback_not_applicable",
+      };
+    }
+
+    plan = easyPayPlan;
+  } else {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "x-novapay-event": "payment.order.updated",
+      "x-novapay-order-id": order.id,
+      "x-novapay-merchant-code": order.merchant.code,
+      "x-novapay-timestamp": timestamp,
+    };
+
+    const notifySecret = revealStoredSecret(order.merchant.notifySecret);
+
+    if (notifySecret) {
+      headers["x-novapay-signature"] = createMerchantCallbackSignature(
+        notifySecret,
+        timestamp,
+        requestBody,
+      );
+    }
+
+    plan = {
+      method: "POST",
+      url: targetUrl,
+      headers,
+      body: requestBody,
+      recordedBody: payload,
+      isDelivered: (response) => response.ok,
+    };
   }
 
   let httpStatus: number | null = null;
-  let responseBody: string | null = null;
   let errorMessage: string | null = null;
   let delivered = false;
 
   try {
-    const response = await fetch(targetUrl, {
-      method: "POST",
-      headers,
-      body: requestBody,
-      signal: AbortSignal.timeout(timeoutMs),
+    const response = await safeFetch(plan.url, {
+      method: plan.method,
+      headers: plan.headers,
+      body: plan.body,
+      timeoutMs,
+      maxResponseBytes: 8 * 1024,
     });
 
     httpStatus = response.status;
-    responseBody = await response.text();
-    delivered = response.ok;
+    const responseText = await response.text();
+    delivered = plan.isDelivered(response, responseText);
   } catch (error) {
     errorMessage = error instanceof Error ? error.message : "Unknown callback error";
   }
@@ -330,12 +379,12 @@ export async function dispatchMerchantCallback(orderId: string, force = false) {
     prisma.paymentCallbackAttempt.create({
       data: {
         paymentOrderId: order.id,
-        targetUrl,
+        targetUrl: redactCallbackUrl(plan.url),
         status: delivered ? CallbackAttemptStatus.SUCCEEDED : CallbackAttemptStatus.FAILED,
         httpStatus,
-        requestHeaders: headers,
-        requestBody: payload,
-        responseBody,
+        requestHeaders: plan.headers,
+        requestBody: plan.recordedBody as Prisma.InputJsonValue,
+        responseBody: null,
         errorMessage,
         completedAt,
       },

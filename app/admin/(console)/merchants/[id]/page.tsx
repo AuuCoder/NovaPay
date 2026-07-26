@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ChannelQrImageField } from "@/app/channel-qr-image-field";
 import {
   createMerchantUserAction,
   createMerchantApiCredentialAction,
@@ -1098,6 +1099,7 @@ export default async function MerchantDetailPage({
                       <form
                         key={template.channelCode}
                         action={createMerchantChannelAccountAsAdminAction}
+                        encType="multipart/form-data"
                         className="rounded-[1.5rem] border border-line bg-white/75 p-5"
                   >
                     <input type="hidden" name="merchantId" value={merchant.id} />
@@ -1125,7 +1127,17 @@ export default async function MerchantDetailPage({
                           label={field.label}
                           hint={field.required ? content.required : content.optional}
                         >
-                          {field.multiline ? (
+                          {field.key === "qrImageUrl" ? (
+                            <ChannelQrImageField
+                              name={`config_${field.key}`}
+                              uploadName={`config_${field.key}_upload`}
+                              removeName={`config_${field.key}_remove`}
+                              placeholder={field.placeholder}
+                              multiline={field.multiline}
+                              inputClassName={inputClass}
+                              textareaClassName={textareaClass}
+                            />
+                          ) : field.multiline ? (
                             <textarea
                               name={`config_${field.key}`}
                               placeholder={field.placeholder}
@@ -1236,6 +1248,7 @@ export default async function MerchantDetailPage({
                     {canManageChannels && template ? (
                       <form
                         action={updateMerchantChannelAccountAsAdminAction}
+                        encType="multipart/form-data"
                         className="mt-4 grid gap-4 border-t border-line/70 pt-4"
                       >
                         <input type="hidden" name="merchantId" value={merchant.id} />
@@ -1252,7 +1265,18 @@ export default async function MerchantDetailPage({
                             label={field.label}
                             hint={field.required ? content.required : content.optional}
                           >
-                            {field.multiline ? (
+                            {field.key === "qrImageUrl" ? (
+                              <ChannelQrImageField
+                                name={`config_${field.key}`}
+                                uploadName={`config_${field.key}_upload`}
+                                removeName={`config_${field.key}_remove`}
+                                defaultValue={maskedConfig[field.key] ?? ""}
+                                placeholder={field.placeholder}
+                                multiline={field.multiline}
+                                inputClassName={inputClass}
+                                textareaClassName={textareaClass}
+                              />
+                            ) : field.multiline ? (
                               <textarea
                                 name={`config_${field.key}`}
                                 defaultValue={maskedConfig[field.key] ?? ""}

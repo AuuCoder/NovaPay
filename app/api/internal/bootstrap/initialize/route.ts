@@ -4,6 +4,7 @@ import {
   runPlatformBootstrap,
   type PlatformBootstrapInput,
 } from "@/lib/platform-bootstrap";
+import { isAuthorizedInternalRequest } from "@/lib/internal-auth";
 
 export const runtime = "nodejs";
 
@@ -20,8 +21,13 @@ export async function POST(request: Request) {
     );
   }
 
+  // Bootstrap is only open before the platform is initialized. After setup, it
+  // requires an authenticated SUPER_ADMIN session or the internal service token
+  // (enforced together with the "already initialized" guard in the service).
+  const authorized = await isAuthorizedInternalRequest(request);
+
   try {
-    const result = await runPlatformBootstrap(body);
+    const result = await runPlatformBootstrap(body, { allowWhenInitialized: authorized });
     const status = await getPlatformBootstrapStatus();
     return NextResponse.json({
       success: true,

@@ -3,6 +3,7 @@ import { PaymentStatus } from "@/generated/prisma/enums";
 import { getMerchantPaymentOrder } from "@/lib/orders/service";
 import { isTerminalPaymentStatus } from "@/lib/orders/status";
 import {
+  isCtfBillCaptureChannelCode,
   isUsdtPaymentChannelCode,
   isWxpayNativeChannelCode,
 } from "@/lib/payments/channel-codes";
@@ -57,6 +58,8 @@ function normalizeHostedOrder(order: {
   status: PaymentStatus;
   subject: string;
   amount: { toString(): string };
+  payableAmount?: { toString(): string } | null;
+  payableCurrency?: string | null;
   currency: string;
   expireAt: Date | null;
   merchant: { code: string };
@@ -70,6 +73,8 @@ function normalizeHostedOrder(order: {
     status: order.status,
     subject: order.subject,
     amount: order.amount.toString(),
+    payableAmount: order.payableAmount?.toString() ?? null,
+    payableCurrency: order.payableCurrency ?? null,
     currency: order.currency,
     expireAt: order.expireAt,
     merchant: {
@@ -470,6 +475,8 @@ async function renderWxpayCheckoutPage(input: {
   externalOrderId: string;
   subject: string;
   amount: string;
+  payableAmount: string | null;
+  payableCurrency: string | null;
   currency: string;
   checkoutUrl: string;
   expireAt: Date | null;
@@ -732,6 +739,176 @@ async function renderWxpayCheckoutPage(input: {
       window.setTimeout(() => {
         window.location.reload();
       }, 6000);
+    </script>
+  </body>
+</html>`;
+}
+
+async function renderCtfBillCaptureCheckoutPage(input: {
+  orderId: string;
+  externalOrderId: string;
+  subject: string;
+  amount: string;
+  payableAmount: string | null;
+  payableCurrency: string | null;
+  currency: string;
+  checkoutUrl: string;
+  expireAt: Date | null;
+  channelCode: string;
+  channelPayload: Record<string, unknown> | null;
+}) {
+  const configuredQrImageUrl =
+    typeof input.channelPayload?.qrImageUrl === "string" && input.channelPayload.qrImageUrl.trim()
+      ? input.channelPayload.qrImageUrl.trim()
+      : null;
+  const qrDataUrl = configuredQrImageUrl
+    ? `${configuredQrImageUrl}${configuredQrImageUrl.includes("?") ? "&" : "?"}o=${encodeURIComponent(input.orderId)}`
+    : await QRCode.toDataURL(input.checkoutUrl, {
+        errorCorrectionLevel: "M",
+        margin: 1,
+        width: 320,
+      });
+  const providerName = input.channelCode === "ctf.alipay.monitor" ? "支付宝支付" : "微信支付";
+  const receiverLabel =
+    typeof input.channelPayload?.receiverLabel === "string" && input.channelPayload.receiverLabel
+      ? input.channelPayload.receiverLabel
+      : "收款账户";
+  const actualPayableAmount = input.payableAmount ?? input.amount;
+  const actualPayableCurrency = input.payableCurrency ?? input.currency;
+  const countdownTargetMs = isValidDate(input.expireAt) ? input.expireAt.getTime() : null;
+  const initialCountdown = countdownTargetMs
+    ? formatCountdown(Math.max(countdownTargetMs - Date.now(), 0))
+    : "--:--";
+  const qrHint =
+    input.channelCode === "ctf.alipay.monitor"
+      ? "请使用支付宝扫码，并按页面显示的应付金额完成付款。"
+      : "请使用微信扫码，并按页面显示的应付金额完成付款。";
+
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(providerName)}</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(217, 108, 31, 0.18), transparent 38%),
+          radial-gradient(circle at bottom right, rgba(30, 112, 219, 0.16), transparent 34%),
+          linear-gradient(180deg, #fff8f1 0%, #f6f8fc 100%);
+        color: #1f2937;
+      }
+      main {
+        width: min(100%, 980px);
+        border-radius: 32px;
+        overflow: hidden;
+        border: 1px solid rgba(31, 41, 55, 0.08);
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 28px 90px rgba(31, 41, 55, 0.14);
+      }
+      .layout { display: grid; }
+      @media (min-width: 900px) { .layout { grid-template-columns: 390px 1fr; } }
+      .qr-panel {
+        padding: 32px 28px;
+        background: linear-gradient(180deg, #111827 0%, #374151 100%);
+        color: white;
+      }
+      .content-panel { padding: 32px 28px; }
+      .eyebrow {
+        margin: 0;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        opacity: 0.74;
+      }
+      h1 { margin: 12px 0 0; font-size: 32px; line-height: 1.15; }
+      .lead { margin: 14px 0 0; font-size: 15px; line-height: 1.85; color: rgba(255,255,255,0.84); }
+      .qr-card { margin-top: 28px; border-radius: 28px; padding: 20px; background: rgba(255,255,255,0.12); }
+      .qr-frame { border-radius: 22px; padding: 14px; background: white; }
+      .qr-frame img { display: block; width: 100%; height: auto; }
+      .qr-tip { margin: 16px 0 0; font-size: 13px; line-height: 1.8; color: rgba(255,255,255,0.9); }
+      .meta-grid { display: grid; gap: 14px; margin-top: 22px; }
+      @media (min-width: 560px) { .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      .meta-item { border-radius: 22px; border: 1px solid rgba(31,41,55,0.08); background: #f9fafb; padding: 16px 18px; }
+      .meta-label { margin: 0; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: #6b7280; }
+      .meta-value { margin: 10px 0 0; color: #111827; line-height: 1.75; word-break: break-all; }
+      .amount { font-size: 32px; font-weight: 800; color: #d96c1f; }
+      .countdown { font-size: 30px; font-weight: 800; color: #111827; }
+      .status-text { margin: 10px 0 0; font-size: 13px; color: #6b7280; line-height: 1.75; }
+      .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+      .button { display: inline-flex; align-items: center; justify-content: center; min-height: 46px; padding: 0 18px; border-radius: 999px; border: 1px solid #e5e7eb; background: white; color: #111827; font-size: 14px; font-weight: 700; text-decoration: none; }
+      .button.primary { border-color: #d96c1f; background: #d96c1f; color: white; }
+      .hint { margin: 18px 0 0; font-size: 13px; line-height: 1.8; color: #6b7280; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="layout">
+        <section class="qr-panel">
+          <p class="eyebrow">NovaPay Checkout</p>
+          <h1>${escapeHtml(providerName)}</h1>
+          <p class="lead">请扫描下方收款码，并手动输入页面显示的应付金额。金额不一致会导致订单无法自动确认。</p>
+          <div class="qr-card">
+            <div class="qr-frame"><img src="${escapeHtml(qrDataUrl)}" alt="收款二维码" /></div>
+            <p class="qr-tip">${escapeHtml(qrHint)}</p>
+          </div>
+        </section>
+
+        <section class="content-panel">
+          <p class="eyebrow" style="color:#6b7280;">订单支付</p>
+          <h1>${escapeHtml(input.subject)}</h1>
+          <div class="meta-grid">
+            <article class="meta-item"><p class="meta-label">应付金额</p><p class="meta-value amount">${escapeHtml(formatAmount(actualPayableAmount, actualPayableCurrency))}</p></article>
+            <article class="meta-item"><p class="meta-label">剩余时间</p><p id="countdown-value" class="meta-value countdown">${escapeHtml(initialCountdown)}</p><p id="countdown-state" class="status-text">请在倒计时结束前完成支付。</p></article>
+            <article class="meta-item"><p class="meta-label">商品金额</p><p class="meta-value">${escapeHtml(formatAmount(input.amount, input.currency))}</p></article>
+            <article class="meta-item"><p class="meta-label">商户订单号</p><p class="meta-value">${escapeHtml(input.externalOrderId)}</p></article>
+            <article class="meta-item"><p class="meta-label">收款账户</p><p class="meta-value">${escapeHtml(receiverLabel)}</p></article>
+            <article class="meta-item"><p class="meta-label">失效时间</p><p class="meta-value">${escapeHtml(input.expireAt ? input.expireAt.toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }) : "按通道默认时效")}</p></article>
+          </div>
+          <div class="actions">
+            <a class="button primary" href="/pay/${escapeHtml(input.orderId)}/return">刷新支付状态</a>
+          </div>
+          <p class="hint">支付时请确保金额与页面“应付金额”完全一致。支付完成后页面会自动更新状态。</p>
+        </section>
+      </div>
+    </main>
+    <script>
+      const deadline = ${JSON.stringify(countdownTargetMs)};
+      const countdownNode = document.getElementById("countdown-value");
+      const stateNode = document.getElementById("countdown-state");
+      function formatRemaining(ms) {
+        const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        const mm = String(minutes).padStart(2, "0");
+        const ss = String(seconds).padStart(2, "0");
+        if (hours > 0) return String(hours).padStart(2, "0") + ":" + mm + ":" + ss;
+        return mm + ":" + ss;
+      }
+      function tick() {
+        if (!deadline) return;
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          if (countdownNode) countdownNode.textContent = "00:00";
+          if (stateNode) stateNode.textContent = "订单已超时，请返回商户重新下单。";
+          return;
+        }
+        if (countdownNode) countdownNode.textContent = formatRemaining(remaining);
+        if (stateNode) stateNode.textContent = "请在倒计时结束前完成支付。";
+        window.setTimeout(tick, 1000);
+      }
+      tick();
+      window.setTimeout(() => window.location.reload(), 6000);
     </script>
   </body>
 </html>`;
@@ -1284,6 +1461,8 @@ export async function GET(
       status: true,
       subject: true,
       amount: true,
+      payableAmount: true,
+      payableCurrency: true,
       currency: true,
       expireAt: true,
       merchant: {
@@ -1351,9 +1530,39 @@ export async function GET(
       externalOrderId: order.externalOrderId,
       subject: order.subject,
       amount: order.amount,
+      payableAmount: order.payableAmount,
+      payableCurrency: order.payableCurrency,
       currency: order.currency,
       checkoutUrl: order.checkoutUrl,
       expireAt: order.expireAt,
+    });
+
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  if (isCtfBillCaptureChannelCode(order.channelCode)) {
+    if (isTerminalPaymentStatus(order.status)) {
+      return Response.redirect(buildHostedPaymentReturnUrl(order.id), 302);
+    }
+
+    const html = await renderCtfBillCaptureCheckoutPage({
+      orderId: order.id,
+      externalOrderId: order.externalOrderId,
+      subject: order.subject,
+      amount: order.amount,
+      payableAmount: order.payableAmount,
+      payableCurrency: order.payableCurrency,
+      currency: order.currency,
+      checkoutUrl: order.checkoutUrl,
+      expireAt: order.expireAt,
+      channelCode: order.channelCode,
+      channelPayload: order.channelPayload,
     });
 
     return new Response(html, {
@@ -1431,6 +1640,8 @@ export async function GET(
       externalOrderId: order.externalOrderId,
       subject: order.subject,
       amount: order.amount,
+      payableAmount: order.payableAmount,
+      payableCurrency: order.payableCurrency,
       currency: order.currency,
       checkoutUrl: order.checkoutUrl,
       expireAt: order.expireAt,

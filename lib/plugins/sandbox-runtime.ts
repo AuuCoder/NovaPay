@@ -84,6 +84,12 @@ export async function loadSandboxedRuntime(
       maxOldGenerationSizeMb: MAX_OLD_GENERATION_MB,
       maxYoungGenerationSizeMb: MAX_YOUNG_GENERATION_MB,
     },
+    // Do NOT inherit the parent process environment. Plugin code running in the
+    // worker must not be able to read process.env (DATABASE_URL,
+    // NOVAPAY_DATA_ENCRYPTION_KEY, S3 keys, …). worker_threads is not itself a
+    // strong security boundary, so this is defense in depth alongside strict
+    // bundle-signature verification at install time.
+    env: {},
     // Use tsx loader for .ts worker files in development
     execArgv: ["--import", "tsx"],
   });

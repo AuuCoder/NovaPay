@@ -681,10 +681,13 @@ async function withMarketplaceFlowContext<T>(
   };
 
   const stubState = createFlowPrismaStub({ plugin, source });
+  const env = process.env as Record<string, string | undefined>;
   const originalSingleton = globalThis.prismaClientSingleton;
   const previousInstanceId = process.env.INSTANCE_ID;
   const previousDatabaseUrl = process.env.DATABASE_URL;
-  const previousSandboxFlag = process.env.NOVAPAY_PLUGIN_SANDBOX_ENABLED;
+  const previousNodeEnv = env.NODE_ENV;
+  const previousUnsafeRuntime =
+    process.env.NOVAPAY_ALLOW_UNSAFE_REMOTE_PLUGIN_RUNTIME;
   const previousLocalPluginDir = process.env.NOVAPAY_LOCAL_PLUGIN_DIR;
   const tmpPluginDir = await mkdtemp(path.join(os.tmpdir(), "novapay-plugin-marketplace-"));
   const installRoot = path.join(process.cwd(), "runtime", "plugins", slug);
@@ -692,7 +695,8 @@ async function withMarketplaceFlowContext<T>(
 
   process.env.INSTANCE_ID = "inst_test-flow";
   process.env.DATABASE_URL = "postgresql://stub:stub@127.0.0.1:5432/stub";
-  process.env.NOVAPAY_PLUGIN_SANDBOX_ENABLED = "0";
+  env.NODE_ENV = "test";
+  process.env.NOVAPAY_ALLOW_UNSAFE_REMOTE_PLUGIN_RUNTIME = "1";
   process.env.NOVAPAY_LOCAL_PLUGIN_DIR = tmpPluginDir;
   invalidateSystemConfigCache("INSTANCE_ID");
   globalThis.prismaClientSingleton = stubState.stub as never;
@@ -779,10 +783,16 @@ async function withMarketplaceFlowContext<T>(
       process.env.DATABASE_URL = previousDatabaseUrl;
     }
 
-    if (previousSandboxFlag === undefined) {
-      delete process.env.NOVAPAY_PLUGIN_SANDBOX_ENABLED;
+    if (previousNodeEnv === undefined) {
+      delete env.NODE_ENV;
     } else {
-      process.env.NOVAPAY_PLUGIN_SANDBOX_ENABLED = previousSandboxFlag;
+      env.NODE_ENV = previousNodeEnv;
+    }
+
+    if (previousUnsafeRuntime === undefined) {
+      delete process.env.NOVAPAY_ALLOW_UNSAFE_REMOTE_PLUGIN_RUNTIME;
+    } else {
+      process.env.NOVAPAY_ALLOW_UNSAFE_REMOTE_PLUGIN_RUNTIME = previousUnsafeRuntime;
     }
 
     if (previousLocalPluginDir === undefined) {
@@ -847,6 +857,32 @@ test("plugin marketplace flow persists a verified license, installs the signed b
     assert.equal(merchantPlugin.slug, plugin.slug);
     assert.equal(stubState.listMerchantInstalls().length, 1);
     assert.equal(stubState.listMerchantInstalls()[0]?.merchantId, "merchant_alpha");
+  });
+});
+
+test("third-party REMOTE_SIGNED runtime is not executable by default", async () => {
+  await withMarketplaceFlowContext(async ({ stubState, plugin }) => {
+    await purchaseAndIssueLicense({
+      slug: plugin.slug,
+      licenseKey: "header.payload.signature",
+      version: plugin.version,
+      instanceId: "inst_test-flow",
+      purchasedBy: "ops@example.com",
+    });
+
+    delete process.env.NOVAPAY_ALLOW_UNSAFE_REMOTE_PLUGIN_RUNTIME;
+    const installResult = await installRemoteMarketplacePluginPackage(plugin.slug);
+
+    assert.equal(installResult.inspection.definition, null);
+    assert.equal(installResult.inspection.runnable, false);
+    assert.match(installResult.inspection.loadError ?? "", /execution is disabled/i);
+    assert.equal(installResult.installRecord.status, "LOAD_ERROR");
+    assert.equal(stubState.getPlugin(plugin.slug)?.metadata?.runnable, false);
+
+    await assert.rejects(
+      () => setMarketplacePluginEnabledState({ slug: plugin.slug, enabled: true }),
+      /cannot|\u4e0d能启用/i,
+    );
   });
 });
 

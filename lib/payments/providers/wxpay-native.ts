@@ -416,6 +416,16 @@ async function requestWechatpay<T>(input: {
   }
 
   const body = input.body ? JSON.stringify(input.body) : "";
+
+  // SSRF guard: the upstream gateway base URL is merchant-configured. In
+  // production, reject targets that resolve to internal/loopback/metadata
+  // addresses. Skipped in dev/test so local mock gateways keep working.
+  const { assertPublicHttpUrl } = await import("@/lib/network/safe-fetch");
+  const { isDevLikeEnv } = await import("@/lib/env");
+  if (!isDevLikeEnv()) {
+    await assertPublicHttpUrl(endpoint.toString(), { allowHttp: true });
+  }
+
   const response = await fetch(endpoint.toString(), {
     method: input.method,
     headers: {

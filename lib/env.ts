@@ -60,20 +60,47 @@ export function getPublicBaseUrl() {
   return normalized;
 }
 
-export function getDataEncryptionKey() {
-  const key = readRequired("NOVAPAY_DATA_ENCRYPTION_KEY", {
-    developmentDefault: DEV_DATA_ENCRYPTION_KEY,
-    message: "NOVAPAY_DATA_ENCRYPTION_KEY is required.",
-  }).trim();
+/**
+ * Only an explicit development/test environment is allowed to fall back to
+ * public source-code default secrets. Any other NODE_ENV value — including the
+ * common case where NODE_ENV is unset (custom servers, PM2, some Docker setups)
+ * — is treated as production for secret purposes and must supply real secrets.
+ */
+export function isDevLikeEnv() {
+  return process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+}
 
-  if (
-    shouldEnforceProductionEnv() &&
-    ["CHANGE_TO_A_32_BYTE_SECRET_KEY", DEV_DATA_ENCRYPTION_KEY].includes(key)
-  ) {
+const WEAK_ENCRYPTION_KEYS = new Set([
+  "CHANGE_TO_A_32_BYTE_SECRET_KEY",
+  DEV_DATA_ENCRYPTION_KEY,
+]);
+
+function assertStrongEncryptionKey(key: string) {
+  if (WEAK_ENCRYPTION_KEYS.has(key) || key.length < 24) {
     throw new Error(
-      "NOVAPAY_DATA_ENCRYPTION_KEY must be replaced with a high-entropy production secret.",
+      "NOVAPAY_DATA_ENCRYPTION_KEY must be a high-entropy secret (>= 24 chars, not a known default).",
     );
   }
+}
 
-  return key;
+export function getDataEncryptionKey() {
+  const configured = process.env.NOVAPAY_DATA_ENCRYPTION_KEY?.trim();
+
+  if (configured) {
+    if (!isDevLikeEnv()) {
+      assertStrongEncryptionKey(configured);
+    }
+    return configured;
+  }
+
+  // No key configured: only fall back to the public dev default in an explicit
+  // development/test environment. Everywhere else, fail fast instead of
+  // silently protecting every stored secret with a source-code constant.
+  if (isDevLikeEnv()) {
+    return DEV_DATA_ENCRYPTION_KEY;
+  }
+
+  throw new Error(
+    "NOVAPAY_DATA_ENCRYPTION_KEY is required (no dev fallback outside NODE_ENV=development/test).",
+  );
 }

@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:background="@color/ctf_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="NovaPay 收款监听"
+            android:textColor="@color/ctf_fg"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="用于监听支付宝 / 微信到账通知，并自动上报平台订单。"
+            android:textColor="@color/ctf_fg" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="监听配置"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/inputCaptureEndpoint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="完整上报地址，可直接粘贴 NovaPay 通道详情里的账单上报 URL"
+            android:inputType="textUri" />
+
+        <EditText
+            android:id="@+id/inputBaseUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="平台地址，例如 https://pay.muyuai.top"
+            android:inputType="textUri" />
+
+        <EditText
+            android:id="@+id/inputAccountId"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="accountId，例如 cmqq33ggv001h0ipboim7y0qq" />
+
+        <EditText
+            android:id="@+id/inputToken"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="token，从 NovaPay 通道详情复制"
+            android:inputType="textPassword" />
+
+        <EditText
+            android:id="@+id/inputCollectorSecret"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="collectorSecret（必填）"
+            android:inputType="textPassword" />
+
+        <Spinner
+            android:id="@+id/spinnerListenerChannel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" />
+
+        <CheckBox
+            android:id="@+id/checkAutoPostNotifications"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="监听到账通知后自动上报平台" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="账单上报地址" />
+
+        <TextView
+            android:id="@+id/textCaptureUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#1E1812"
+            android:padding="12dp"
+            android:textColor="#F7EFE5"
+            android:textIsSelectable="true" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical">
+
+            <Button
+                android:id="@+id/buttonSaveConfig"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="保存监听配置" />
+
+            <Button
+                android:id="@+id/buttonOpenNotificationAccess"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="打开系统通知监听设置" />
+
+            <Button
+                android:id="@+id/buttonRefreshStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="刷新监听状态" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="通知监听状态"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/textNotificationAccessStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#FFFFFF"
+            android:padding="12dp"
+            android:textIsSelectable="true" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="最近一次通知内容"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/textNotificationPayload"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#FFFFFF"
+            android:padding="12dp"
+            android:textIsSelectable="true" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="最近一次上报结果"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/textNotificationPostResult"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp"
+            android:background="#FFFFFF"
+            android:padding="12dp"
+            android:textIsSelectable="true" />
+    </LinearLayout>
+</ScrollView>

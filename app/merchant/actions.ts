@@ -18,6 +18,15 @@ import {
 } from "@/lib/merchant-credential-reveal";
 import { revealMerchantCredentialSecret } from "@/lib/merchant-credentials";
 import { generateMerchantApiCredential } from "@/lib/merchant-credentials";
+import { createEasyPayCredentialRecord } from "@/lib/easypay/credentials";
+import {
+  findUninstalledMappingTargets,
+  parseTypeMapping,
+} from "@/lib/easypay/mapping";
+import {
+  clearEasyPayCredentialReveal,
+  stashEasyPayCredentialReveal,
+} from "@/lib/merchant-easypay-reveal";
 import {
   createMerchantChannelAccountFromForm,
   updateMerchantChannelAccountFromForm,
@@ -40,6 +49,7 @@ import {
   channelRequiresMerchantProfile,
 } from "@/lib/merchant-profile-completion";
 import { formatAmount } from "@/lib/payments/utils";
+import type { Prisma } from "@/generated/prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 import {
   createMerchantPaymentRefund,
@@ -69,6 +79,11 @@ function getRequiredString(formData: FormData, key: string, label: string) {
 
 function getBoolean(formData: FormData, key: string) {
   return formData.get(key) === "on";
+}
+
+function hasUploadedQrImage(formData: FormData) {
+  const value = formData.get("config_qrImageUrl_upload");
+  return typeof File !== "undefined" && value instanceof File && value.size > 0;
 }
 
 function getRedirectTo(formData: FormData, fallback: string) {
@@ -386,7 +401,6 @@ export async function registerMerchantAction(formData: FormData) {
       | {
           merchant: { id: string; code: string };
           merchantUser: { id: string };
-          bootstrapCredential: { keyId: string; secret: string; label: string };
         }
       | null = null;
 
@@ -401,7 +415,7 @@ export async function registerMerchantAction(formData: FormData) {
             data: {
               name: merchantName,
               code: merchantCode,
-              status: "APPROVED",
+              status: "PENDING",
               legalName: null,
               contactName: null,
               contactEmail: null,
@@ -409,10 +423,10 @@ export async function registerMerchantAction(formData: FormData) {
               website: null,
               companyRegistrationId: null,
               onboardingNote: null,
-              approvedAt: now,
-              approvedBy: "self-service",
+              approvedAt: null,
+              approvedBy: null,
               statusChangedAt: now,
-              callbackEnabled: true,
+              callbackEnabled: false,
             },
             select: {
               id: true,
@@ -434,19 +448,9 @@ export async function registerMerchantAction(formData: FormData) {
             },
           });
 
-          const bootstrapCredential = await createMerchantApiCredentialRecord(tx, {
-            merchantId: merchant.id,
-            label: "Default API Credential",
-          });
-
           return {
             merchant,
             merchantUser,
-            bootstrapCredential: {
-              keyId: bootstrapCredential.generated.keyId,
-              secret: bootstrapCredential.generated.secret,
-              label: bootstrapCredential.credential.label,
-            },
           };
         });
 
@@ -473,28 +477,22 @@ export async function registerMerchantAction(formData: FormData) {
       action: "merchant.self_register",
       resourceType: "merchant",
       resourceId: result.merchant.id,
-      summary: `商户 ${result.merchant.code} 通过自助门户开通基础接入并自动生成首个 API 凭证。`,
+      summary: `商户 ${result.merchant.code} 通过自助门户提交注册，等待管理员审核。`,
       metadata: {
         merchantCode: result.merchant.code,
         account,
         profileCompleted: false,
-        merchantStatus: "APPROVED",
-        bootstrapCredentialKeyId: result.bootstrapCredential.keyId,
+        merchantStatus: "PENDING",
+        bootstrapCredentialCreated: false,
       },
     });
 
     await createMerchantSession(result.merchantUser.id);
-    await stashMerchantCredentialReveal({
-      keyId: result.bootstrapCredential.keyId,
-      secret: result.bootstrapCredential.secret,
-      label: result.bootstrapCredential.label,
-      source: "bootstrap",
-    });
     revalidateMerchantPaths();
     successRedirect = withMessage(
       "/merchant",
       "success",
-      "账号注册完成，基础接入已开通，系统已自动生成首个 API 凭证。",
+      "账号注册完成，商户资料正在等待管理员审核。审核通过后可创建 API 凭证。",
     );
   } catch (error) {
     redirectWithError("/merchant/register", error);
@@ -646,6 +644,10 @@ export async function createMerchantSelfServiceApiCredentialAction(formData: For
   let successRedirect: string | null = null;
 
   try {
+    if (session.merchantUser.merchant.status !== "APPROVED") {
+      throw new Error("商户审核通过后才能创建 API 凭证。");
+    }
+
     const merchant = await getPrismaClient().merchant.findUnique({
       where: {
         id: session.merchantUser.merchantId,
@@ -765,7 +767,7 @@ export async function revealMerchantApiCredentialSecretAction(formData: FormData
 }
 
 export async function runMerchantCheckoutSmokeTestAction(formData: FormData) {
-  const session = await requireMerchantSession();
+  const session = await requireMerchantPermission("order:write");
   let checkoutRedirect: string | null = null;
 
   try {
@@ -949,9 +951,154 @@ export async function updateMerchantSelfServiceApiCredentialAction(formData: For
   redirect(withMessage(redirectTo, "success", "商户 API 凭证已更新。"));
 }
 
+// ── 易支付凭证 ──────────────────────────────────────────────
+
+export async function createMerchantEasyPayCredentialAction(formData: FormData) {
+  const session = await requireMerchantPermission("credential:write");
+  const redirectTo = getRedirectTo(formData, "/merchant/easypay");
+  let successRedirect: string | null = null;
+
+  try {
+    if (session.merchantUser.merchant.status !== "APPROVED") {
+      throw new Error("商户审核通过后才能创建易支付凭证。");
+    }
+
+    const label = getRequiredString(formData, "label", "凭证标签");
+    const installed = await listMerchantInstalledPaymentChannels(
+      session.merchantUser.merchantId,
+    );
+    const installedCodes = installed.map((channel) => channel.code);
+    const typeMapping = parseTypeMappingForm(formData, installedCodes);
+
+    const { credential, material } = await createEasyPayCredentialRecord(getPrismaClient(), {
+      merchantId: session.merchantUser.merchantId,
+      label,
+      typeMapping,
+    });
+
+    await writeAdminAuditLog({
+      actor: getMerchantAuditActor(session),
+      action: "merchant.self_service.create_easypay_credential",
+      resourceType: "easypay_credential",
+      resourceId: credential.id,
+      summary: `商户 ${session.merchantUser.merchant.code} 新建易支付凭证 ${label}。`,
+      metadata: {
+        pid: credential.pid,
+      },
+    });
+    await stashEasyPayCredentialReveal({
+      credentialId: credential.id,
+      pid: material.pid,
+      key: material.key,
+      label: credential.label,
+    });
+    revalidateMerchantPaths();
+
+    successRedirect = withMessage(
+      redirectTo,
+      "success",
+      "易支付凭证已创建,请立即保存本次展示的 KEY。",
+    );
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(successRedirect ?? redirectTo);
+}
+
+export async function dismissMerchantEasyPayRevealAction(formData: FormData) {
+  await requireMerchantSession();
+  const redirectTo = getRedirectTo(formData, "/merchant/easypay");
+  await clearEasyPayCredentialReveal();
+  redirect(redirectTo);
+}
+
+export async function updateMerchantEasyPayCredentialAction(formData: FormData) {
+  const session = await requireMerchantPermission("credential:write");
+  const redirectTo = getRedirectTo(formData, "/merchant/easypay");
+
+  try {
+    const prisma = getPrismaClient();
+    const id = getRequiredString(formData, "id", "凭证 ID");
+    const existing = await prisma.easyPayCredential.findUnique({
+      where: { id },
+      select: { id: true, merchantId: true, label: true, pid: true },
+    });
+
+    if (!existing || existing.merchantId !== session.merchantUser.merchantId) {
+      throw new Error("指定的易支付凭证不存在。");
+    }
+
+    const installed = await listMerchantInstalledPaymentChannels(
+      session.merchantUser.merchantId,
+    );
+    const installedCodes = installed.map((channel) => channel.code);
+    const typeMapping = parseTypeMappingForm(formData, installedCodes);
+
+    const credential = await prisma.easyPayCredential.update({
+      where: { id },
+      data: {
+        enabled: getBoolean(formData, "enabled"),
+        typeMapping: typeMapping as Prisma.InputJsonValue,
+      },
+    });
+
+    await writeAdminAuditLog({
+      actor: getMerchantAuditActor(session),
+      action: "merchant.self_service.update_easypay_credential",
+      resourceType: "easypay_credential",
+      resourceId: credential.id,
+      summary: `商户 ${session.merchantUser.merchant.code} 更新易支付凭证 ${existing.label}。`,
+      metadata: {
+        pid: existing.pid,
+        enabled: credential.enabled,
+      },
+    });
+    revalidateMerchantPaths();
+  } catch (error) {
+    redirectWithError(redirectTo, error);
+  }
+
+  redirect(withMessage(redirectTo, "success", "易支付凭证已更新。"));
+}
+
+/**
+ * 从表单读取 type → channelCode 映射。表单约定:成对的 mappingType[] / mappingChannel[]。
+ * 空行忽略;校验目标通道必须已安装。
+ */
+function parseTypeMappingForm(formData: FormData, installedCodes: string[]) {
+  const types = formData.getAll("mappingType").map((v) => String(v).trim());
+  const channels = formData.getAll("mappingChannel").map((v) => String(v).trim());
+
+  const raw: Record<string, string> = {};
+  for (let i = 0; i < types.length; i += 1) {
+    const type = types[i];
+    const channel = channels[i] ?? "";
+    if (type && channel) {
+      raw[type] = channel;
+    }
+  }
+
+  const mapping = parseTypeMapping(raw);
+  const invalid = findUninstalledMappingTargets(mapping, installedCodes);
+
+  if (invalid.length > 0) {
+    const detail = invalid.map((item) => `${item.type}→${item.channelCode}`).join("、");
+    throw new Error(`映射的支付通道未安装:${detail}。请先在「通道」页安装对应插件。`);
+  }
+
+  if (Object.keys(mapping).length === 0) {
+    throw new Error("至少配置一条有效的支付类型映射。");
+  }
+
+  return mapping;
+}
+
 export async function createMerchantChannelAccountAction(formData: FormData) {
   const session = await requireMerchantPermission("channel:write");
   const redirectTo = getRedirectTo(formData, "/merchant/channels");
+  const qrImageUploaded = hasUploadedQrImage(formData);
+  const qrImageRemoved = getBoolean(formData, "config_qrImageUrl_remove");
 
   try {
     const { account, template } = await createMerchantChannelAccountFromForm({
@@ -969,6 +1116,8 @@ export async function createMerchantChannelAccountAction(formData: FormData) {
         channelCode: template.channelCode,
         providerKey: template.providerKey,
         callbackToken: account.callbackToken,
+        qrImageUploaded,
+        qrImageRemoved,
       },
     });
     revalidateMerchantPaths();
@@ -982,6 +1131,8 @@ export async function createMerchantChannelAccountAction(formData: FormData) {
 export async function updateMerchantChannelAccountAction(formData: FormData) {
   const session = await requireMerchantPermission("channel:write");
   const redirectTo = getRedirectTo(formData, "/merchant/channels");
+  const qrImageUploaded = hasUploadedQrImage(formData);
+  const qrImageRemoved = getBoolean(formData, "config_qrImageUrl_remove");
 
   try {
     const { account, template, previousCallbackToken } =
@@ -1000,6 +1151,8 @@ export async function updateMerchantChannelAccountAction(formData: FormData) {
         channelCode: template.channelCode,
         callbackToken: previousCallbackToken,
         enabled: account.enabled,
+        qrImageUploaded,
+        qrImageRemoved,
       },
     });
     revalidateMerchantPaths();

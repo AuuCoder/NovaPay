@@ -7,6 +7,10 @@ import { revealProviderConfigForRuntime } from "@/lib/provider-account-config";
 import { getPrismaClient } from "@/lib/prisma";
 import { isRecord } from "@/lib/payments/utils";
 import type { ProviderAccountConfig } from "@/lib/payments/types";
+import {
+  CTF_BILL_CAPTURE_CHANNEL_CODES,
+  CTF_BILL_CAPTURE_PROVIDER_KEY,
+} from "@/lib/payments/channel-codes";
 
 interface ResolvedMerchantChannelRoute {
   account: ProviderAccountConfig;
@@ -100,6 +104,26 @@ export async function getMerchantChannelAccountBySecureRoute(input: {
   }
 
   return normalizeMerchantChannelAccount(account);
+}
+
+export async function getCtfBillCaptureAccountBySecureRoute(input: {
+  accountId: string;
+  callbackToken: string;
+}) {
+  const prisma = getPrismaClient();
+  const account = await prisma.merchantChannelAccount.findFirst({
+    where: {
+      id: input.accountId,
+      callbackToken: input.callbackToken,
+      enabled: true,
+      providerKey: CTF_BILL_CAPTURE_PROVIDER_KEY,
+      channelCode: {
+        in: [...CTF_BILL_CAPTURE_CHANNEL_CODES],
+      },
+    },
+  });
+
+  return account ? normalizeMerchantChannelAccount(account) : null;
 }
 
 export async function getPaymentRuntimeAccountBySelection(input: {

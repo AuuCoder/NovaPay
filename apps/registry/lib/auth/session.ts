@@ -284,12 +284,7 @@ export async function registerRegistryDeveloper(
   if (!result.success || !result.developer) {
     return result;
   }
-
-  const activated = await store.updateStatus(result.developer.id, "ACTIVE");
-  return {
-    ...result,
-    developer: activated,
-  };
+  return result;
 }
 
 export async function loginRegistryDeveloper(input: {

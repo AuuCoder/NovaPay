@@ -247,6 +247,16 @@ async function callAlipayApi(
     biz_content: JSON.stringify(bizContent),
   };
   const gatewayUrl = getGatewayUrl(account);
+
+  // SSRF guard: the gateway URL is merchant-configured. In production, reject
+  // targets resolving to internal/loopback/metadata addresses. Skipped in
+  // dev/test so local mock gateways keep working.
+  const { assertPublicHttpUrl } = await import("@/lib/network/safe-fetch");
+  const { isDevLikeEnv } = await import("@/lib/env");
+  if (!isDevLikeEnv()) {
+    await assertPublicHttpUrl(gatewayUrl, { allowHttp: true });
+  }
+
   const body = new URLSearchParams({
     ...params,
     sign: signParameters(params, account),

@@ -37,6 +37,8 @@ export async function developerSignInAction(formData: FormData) {
         "error",
         result.errorCode === "ACCOUNT_SUSPENDED"
           ? "account_suspended"
+          : result.errorCode === "EMAIL_UNVERIFIED"
+            ? "email_unverified"
           : "invalid_credentials",
       ),
     );
@@ -83,14 +85,7 @@ export async function developerRegisterAction(formData: FormData) {
     redirect(withMessage("/developer/auth", "error", errorMessage));
   }
 
-  await createRegistrySession({
-    actorKind: "DEVELOPER",
-    actorId: result.developer.id,
-    email: result.developer.email,
-    displayName: result.developer.displayName,
-  });
-
-  redirect(withMessage("/developer/plugins", "success", "developer_created"));
+  redirect(withMessage("/developer/auth", "success", "verification_required"));
 }
 
 export async function developerSsoSignInAction() {

@@ -10,6 +10,7 @@ import type {
   PaymentPluginDefinition,
 } from "@/lib/payments/plugins/types";
 import type { PaymentProvider } from "@/lib/payments/types";
+import { getPaymentPlugin } from "@/lib/payments/plugins";
 
 export interface LocalPaymentPluginRuntimeModule {
   provider: PaymentProvider;
@@ -235,17 +236,50 @@ export async function loadPaymentPluginRuntimeInspectionFromManifestPath(
 ) {
   const manifest = await readPluginPackageManifestFile(manifestPath, source);
 
-  // Req 21.1: REMOTE_SIGNED plugins load through the worker_threads sandbox
-  // only when the sandbox feature flag is explicitly enabled. Other sources
-  // (LOCAL_PACKAGE, BUILTIN) and the default REMOTE_SIGNED path continue
-  // using the direct import path.
-  if (
-    source === "REMOTE_SIGNED" &&
-    process.env.NOVAPAY_PLUGIN_SANDBOX_ENABLED === "1"
-  ) {
+  if (source === "REMOTE_SIGNED") {
+    const builtin = getPaymentPlugin(manifest.channelCode);
+
+    // Registry entries for first-party plugins may be classified as
+    // REMOTE_SIGNED, but their runtime must remain the implementation shipped
+    // in this application image. Never execute registry bundle code for them.
+    if (
+      manifest.slug.startsWith("novapay.") &&
+      builtin?.marketplace.slug === manifest.slug
+    ) {
+      const runnable =
+        (builtin.provider.getSummary().implementationStatus ?? "skeleton") === "ready";
+      return {
+        manifest,
+        inspection: {
+          definition: builtin,
+          runnable,
+          loadError: runnable
+            ? null
+            : "Built-in runtime implementationStatus is not ready.",
+        },
+      };
+    }
+
+    // worker_threads is process isolation for scheduling, not a security
+    // boundary: ESM imports can still reach node:fs/node:process. Third-party
+    // remote code therefore fails closed unless an operator explicitly opts
+    // into the legacy in-process execution risk.
+    if (process.env.NOVAPAY_ALLOW_UNSAFE_REMOTE_PLUGIN_RUNTIME !== "1") {
+      return {
+        manifest,
+        inspection: {
+          definition: null,
+          runnable: false,
+          loadError:
+            "Third-party REMOTE_SIGNED runtime execution is disabled. " +
+            "Set NOVAPAY_ALLOW_UNSAFE_REMOTE_PLUGIN_RUNTIME=1 only for temporary compatibility.",
+        },
+      };
+    }
+
     return {
       manifest,
-      inspection: await loadSandboxedPaymentPluginRuntimeInspection(manifest),
+      inspection: await loadLocalPaymentPluginRuntimeInspection(manifest),
     };
   }
 
@@ -253,54 +287,4 @@ export async function loadPaymentPluginRuntimeInspectionFromManifestPath(
     manifest,
     inspection: await loadLocalPaymentPluginRuntimeInspection(manifest),
   };
-}
-
-/**
- * Loads a REMOTE_SIGNED plugin through the worker_threads sandbox (Req 21.1).
- * Returns the same inspection shape as `loadLocalPaymentPluginRuntimeInspection`
- * so callers don't need to branch.
- */
-async function loadSandboxedPaymentPluginRuntimeInspection(
-  manifest: LocalPluginPackageManifest,
-): Promise<LocalPaymentPluginRuntimeInspection> {
-  if (!manifest.runtimePath) {
-    return { definition: null, runnable: false, loadError: null };
-  }
-
-  try {
-    const { loadSandboxedRuntime } = await import("@/lib/plugins/sandbox-runtime");
-    const handle = await loadSandboxedRuntime({
-      installPath: manifest.localPath.replace(/\/plugin\.json$/, ""),
-      runtimePath: manifest.runtimePath,
-      capabilities: manifest.capabilities,
-    });
-
-    // Probe the provider to check if it's runnable
-    const summary = (await handle.callMethod("getSummary")) as {
-      implementationStatus?: string;
-    } | null;
-
-    await handle.dispose();
-
-    const implementationStatus = summary?.implementationStatus ?? "skeleton";
-    const runnable = implementationStatus === "ready";
-
-    // We don't construct a full PaymentPluginDefinition here because the
-    // sandbox handle is disposed. The marketplace.ts layer will re-create
-    // a handle when it needs to call createPayment/closePayment at runtime.
-    return {
-      definition: null, // Sandbox plugins get their definition resolved at call time
-      runnable,
-      loadError: runnable
-        ? null
-        : "Sandbox runtime loaded, but implementationStatus is not ready.",
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      definition: null,
-      runnable: false,
-      loadError: `Sandbox load failed: ${message}`,
-    };
-  }
 }

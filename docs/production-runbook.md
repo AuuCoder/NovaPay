@@ -6,7 +6,7 @@ Standard launch flow for NovaPay on a single server. The full stack consists of:
 
 - Main app (NovaPay gateway + admin console + hosted checkout)
 - Plugin Registry (independent Next.js service)
-- Three background workers: callbacks / finance / onchain
+- Five background workers: callbacks / finance / ctf-bill-capture / payment-monitor / onchain
 - PostgreSQL 16 (two databases: `novapay`, `novapay_registry`)
 - MinIO (S3-compatible object storage for plugin bundles)
 
@@ -122,7 +122,7 @@ ADMIN_BOOTSTRAP_NAME="Platform Administrator"
 Notes:
 
 - `NOVAPAY_PUBLIC_BASE_URL` must be a public HTTPS domain — never `localhost`.
-- Alipay and WeChat Pay credentials no longer come from platform env vars; merchants manage them in the merchant console.
+- 支付宝和微信支付参数不再由平台环境变量统一提供 (Alipay and WeChat Pay credentials no longer come from platform env vars; merchants manage them in the merchant console.)
 - USDT receiving addresses also live per-merchant in the channel instance, not in `.env`.
 - Replace every `REPLACE_WITH_*` placeholder before launching, otherwise the production guard refuses to start.
 - After the first admin login succeeds, set `ADMIN_BOOTSTRAP_ENABLED="0"` so subsequent restarts don't reset the admin password.
@@ -152,6 +152,8 @@ Extra checks for USDT channels:
 - Per-chain RPC / token / mint configured
 - No duplicate on-chain receiving addresses
 - `onchain-worker` is in the live process set
+- `payment-monitor-worker` is in the live process set
+- `ctf-bill-capture-worker` is in the live process set if CTF bill-capture channels are enabled
 
 ---
 
@@ -161,7 +163,7 @@ Extra checks for USDT channels:
 docker compose -f deploy/docker-compose.prod.yml up -d
 ```
 
-Expect 9 containers in `Up (healthy)`:
+Expect 11 containers in `Up (healthy)`:
 
 | Container | Port | Role |
 |---|---|---|
@@ -171,6 +173,8 @@ Expect 9 containers in `Up (healthy)`:
 | `registry` | 3100 | Plugin registry |
 | `callbacks-worker` | — | Merchant callback retries |
 | `finance-worker` | — | Finance ledger sync |
+| `ctf-bill-capture-worker` | — | CTF App bill-capture matching |
+| `payment-monitor-worker` | — | Official Alipay / WeChat order reconciliation |
 | `onchain-worker` | — | USDT chain scanning |
 | `minio-init` | — | One-shot bucket bootstrap |
 | Reverse proxy (Caddy/Nginx) | 80/443 | HTTPS gateway |
@@ -188,8 +192,8 @@ Walk through these checks in order:
 3. `https://pay.example.com/admin/login` accepts the bootstrap admin credentials
 4. `https://pay.example.com/docs` renders the OpenAPI page
 5. A merchant can register, get approved, and sign in
-6. All three workers show `Up` in `docker compose ps`
-7. `/admin/plugins` lists 5 built-in plugins as installed + enabled
+6. All five workers show `Up` in `docker compose ps`
+7. `/admin/plugins` lists 7 built-in plugins as installed + enabled
 
 ---
 
@@ -248,7 +252,42 @@ Bring up one chain at a time. For example with `usdt.bsc`:
 
 ---
 
-## 8. Finance ops
+## 8. CTF bill-capture drill check
+
+Use this only for sandbox / CTF personal no-signature collection drills. The platform side expects a normalized bill event from the lab capture agent, not a platform-owned pooled wallet.
+
+1. Install `ctf.alipay.monitor` or `ctf.wxpay.monitor` for the merchant.
+2. Create and enable a merchant channel instance. Optional config:
+   - `qrPayload`: sandbox receiving QR payload / URL
+   - `receiverLabel`: display label shown on hosted checkout
+   - `collectorSecret`: required secret for the capture agent
+3. Copy the channel callback URL shown in the channel instance. It resolves to:
+
+```text
+POST /api/ctf/bill-capture/{accountId}/{token}
+Header: x-ctf-capture-secret: <required collectorSecret>
+```
+
+4. Create an order on the CTF channel and open the hosted checkout page.
+5. Post a normalized bill JSON from the CTF capture agent, for example:
+
+```json
+{
+  "channelCode": "ctf.alipay.monitor",
+  "amount": "88.00",
+  "paidAt": "2026-06-22 12:30:00",
+  "externalBillId": "CTF-ALIPAY-BILL-0001",
+  "payerAccount": "buyer@example.test",
+  "remark": "ORDER-20260622-001 NovaPay CTF",
+  "source": "frida-alipay-lab"
+}
+```
+
+6. `ctf-bill-capture-worker` should either match immediately or pick up the stored `RECEIVED` event on the next scan. A successful match sets the payment order to `SUCCEEDED`, creates ledger entries, and dispatches the merchant callback.
+
+---
+
+## 9. Finance ops
 
 The finance page provides:
 
@@ -267,7 +306,7 @@ That action writes a `SETTLEMENT_PAYOUT` ledger entry and recomputes the balance
 
 ---
 
-## 9. Backup and restore
+## 10. Backup and restore
 
 ### 9.1 Automated backup
 
@@ -312,7 +351,7 @@ After a restore, run `preflight` once before `up -d`.
 
 ---
 
-## 10. Upgrade flow
+## 11. Upgrade flow
 
 ```bash
 cd /opt/novapay
@@ -333,13 +372,13 @@ Always back up the databases before applying schema changes — rollbacks are pa
 
 ---
 
-## 11. Monitoring and logs
+## 12. Monitoring and logs
 
 Bare minimum monitoring:
 
 - `/api/health` ping every minute
 - `/api/.well-known/trust.json` ping every minute
-- All three workers stay `Up` in `docker compose ps`
+- All five workers stay `Up` in `docker compose ps`
 - Postgres container reports healthy
 - Disk usage on database and MinIO data volumes
 
@@ -349,13 +388,15 @@ Log tailing:
 docker compose -f deploy/docker-compose.prod.yml logs -f web
 docker compose -f deploy/docker-compose.prod.yml logs -f registry
 docker compose -f deploy/docker-compose.prod.yml logs -f callbacks-worker
+docker compose -f deploy/docker-compose.prod.yml logs -f ctf-bill-capture-worker
+docker compose -f deploy/docker-compose.prod.yml logs -f payment-monitor-worker
 ```
 
 For ELK / Loki, configure the Docker logging driver to forward directly instead of relying on `docker logs` files growing unboundedly.
 
 ---
 
-## 12. Security checklist
+## 13. Security checklist
 
 Walk through this before going live:
 
@@ -372,7 +413,7 @@ Walk through this before going live:
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 | Symptom | Possible cause | Where to look |
 |---|---|---|
@@ -380,13 +421,15 @@ Walk through this before going live:
 | Order creation returns 422 PLUGIN_NOT_INSTALLED | Channel plugin not installed/enabled | Check `/admin/plugins` |
 | Browser doesn't return after Alipay payment | Upstream rejects the returnUrl | Use a real HTTPS domain — never `localhost` or `*.localtest.me` |
 | Merchant never receives a callback | Worker not running, or merchant returns non-2xx | `docker compose logs callbacks-worker` |
+| Official payment sync lags behind | `payment-monitor-worker` not running, or upstream query API is failing | `docker compose logs payment-monitor-worker` |
+| CTF App bill posted but order not paid | `ctf-bill-capture-worker` not running, amount/remark mismatch, or wrong channel instance URL | `docker compose logs ctf-bill-capture-worker` and inspect `CtfBillCaptureEvent` |
 | USDT deposits not picked up | Worker not running, or RPC outage | `docker compose logs onchain-worker` |
 | Plugin download 403 | MinIO credentials wrong, bucket missing | `mc alias set` then `mc ls local/` |
 | Registry boot error: "No active signing key" | Empty DB, migrations didn't run | Re-run `migrate-registry`, restart `registry` |
 
 ---
 
-## 14. Things to avoid
+## 15. Things to avoid
 
 - Don't run `db:push` or `db:migrate dev` in production
 - Don't commit `.env` to git
@@ -394,4 +437,4 @@ Walk through this before going live:
 - Don't put merchant payment credentials in `.env`
 - Don't disable secure cookies (HTTPS is mandatory)
 - Don't share the MinIO `root` credentials with the application — create scoped access keys
-- Don't run `finance-worker` / `onchain-worker` on two replicas simultaneously (double-counts ledger entries and on-chain matches)
+- Don't run `finance-worker` / `ctf-bill-capture-worker` / `payment-monitor-worker` / `onchain-worker` on two replicas simultaneously (double-counts ledger entries and reconciliation work)

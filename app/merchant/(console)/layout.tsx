@@ -31,6 +31,8 @@ export default async function MerchantConsoleLayout({
           overviewProfileDetail: "Maintain merchant identity, callback, and security settings",
           overviewCredentialsLabel: "API Credentials",
           overviewCredentialsDetail: "Create credentials and save one-time Secrets securely",
+          overviewEasyPayLabel: "EasyPay",
+          overviewEasyPayDetail: "Issue EasyPay (pid/KEY) credentials and map payment types",
           pluginsLabel: "Plugin Market",
           channelsLabel: "Channels",
           ordersLabel: "Orders",
@@ -56,6 +58,8 @@ export default async function MerchantConsoleLayout({
           overviewProfileDetail: "维护商户资料、业务回调与安全参数",
           overviewCredentialsLabel: "API 凭证",
           overviewCredentialsDetail: "创建凭证并保存一次性 Secret",
+          overviewEasyPayLabel: "易支付",
+          overviewEasyPayDetail: "签发易支付(pid/KEY)凭证并配置支付类型映射",
           pluginsLabel: "插件市场",
           channelsLabel: "支付通道",
           ordersLabel: "我的订单",
@@ -79,6 +83,7 @@ export default async function MerchantConsoleLayout({
         "/merchant/integration",
         "/merchant/profile",
         "/merchant/credentials",
+        "/merchant/easypay",
       ],
       children: [
         {
@@ -100,6 +105,11 @@ export default async function MerchantConsoleLayout({
           href: "/merchant/credentials",
           label: content.overviewCredentialsLabel,
           detail: content.overviewCredentialsDetail,
+        },
+        {
+          href: "/merchant/easypay",
+          label: content.overviewEasyPayLabel,
+          detail: content.overviewEasyPayDetail,
         },
       ],
     },

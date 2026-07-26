@@ -17,7 +17,7 @@
 
 import { sign as cryptoSignRaw, type KeyObject } from "node:crypto";
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -153,6 +153,15 @@ export interface UploadedCatalogRegistrationInput {
   priceLabel: string | null;
   purchaseUrl: string | null;
   reviewState?: ReviewState;
+}
+
+export interface CatalogPricingUpdateInput {
+  pricingMode: "FREE" | "PAID";
+  pricingPlanKind?: RegistryPaidPricingPlanKind | null;
+  priceAmountCents?: number | null;
+  priceCurrency?: string | null;
+  priceLabel?: string | null;
+  purchaseUrl?: string | null;
 }
 
 interface PersistedRemoteBundleFile {
@@ -311,6 +320,18 @@ function normalizePriceCurrency(value: string | null | undefined) {
 
   const normalized = value.trim().toUpperCase();
   return /^[A-Z]{3}$/.test(normalized) ? normalized : null;
+}
+
+function normalizeOptionalText(value: string | null | undefined) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getPersistedRemoteBundlesDir(rootDir: string) {
+  return path.join(
+    path.resolve(rootDir, "..", ".."),
+    "artifacts",
+    "remote-plugin-bundles",
+  );
 }
 
 function formatCurrencyAmount(
@@ -491,11 +512,7 @@ async function loadPersistedRemoteBundles(input: {
   signer: Ed25519Signer;
   keyStore: SigningKeyStore;
 }) {
-  const artifactsDir = path.join(
-    path.resolve(input.rootDir, "..", ".."),
-    "artifacts",
-    "remote-plugin-bundles",
-  );
+  const artifactsDir = getPersistedRemoteBundlesDir(input.rootDir);
 
   let fileNames: string[] = [];
   try {
@@ -978,6 +995,167 @@ export function registerUploadedCatalogBundle(
   }
 
   saveRuntimePersistence(state);
+}
+
+function resolveCatalogPricingPatch(
+  input: CatalogPricingUpdateInput,
+): Pick<
+  CatalogEntry,
+  | "pricingMode"
+  | "pricingPlanKind"
+  | "priceAmountCents"
+  | "priceCurrency"
+  | "priceLabel"
+  | "purchaseUrl"
+> {
+  if (input.pricingMode === "FREE") {
+    return {
+      pricingMode: "FREE",
+      pricingPlanKind: null,
+      priceAmountCents: null,
+      priceCurrency: null,
+      priceLabel: null,
+      purchaseUrl: null,
+    };
+  }
+
+  const priceCurrency = normalizePriceCurrency(input.priceCurrency);
+  const priceAmountCents = input.priceAmountCents;
+
+  if (
+    !input.pricingPlanKind ||
+    !isRegistryPaidPricingPlanKind(input.pricingPlanKind) ||
+    typeof priceAmountCents !== "number" ||
+    !Number.isInteger(priceAmountCents) ||
+    priceAmountCents <= 0 ||
+    !priceCurrency
+  ) {
+    throw new Error("PLUGIN_PRICING_INCOMPLETE");
+  }
+
+  const base = {
+    pricingMode: "PAID" as const,
+    pricingPlanKind: input.pricingPlanKind,
+    priceAmountCents,
+    priceCurrency,
+    priceLabel: normalizeOptionalText(input.priceLabel),
+    purchaseUrl: normalizeOptionalText(input.purchaseUrl),
+  };
+
+  return {
+    ...base,
+    priceLabel:
+      base.priceLabel ??
+      `${formatCurrencyAmount(
+        base.priceAmountCents,
+        base.priceCurrency,
+        "en",
+      )} ${getPricingPlanSuffix(base.pricingPlanKind, "en")}`,
+  };
+}
+
+async function persistRemoteBundlePricing(
+  slug: string,
+  pricing: ReturnType<typeof resolveCatalogPricingPatch>,
+) {
+  const artifactsDir = getPersistedRemoteBundlesDir(REGISTRY_PROJECT_ROOT);
+  const filePath = path.join(artifactsDir, `${slug}.json`);
+
+  let rawText: string;
+  try {
+    rawText = await readFile(filePath, "utf8");
+  } catch {
+    return false;
+  }
+
+  const parsed = JSON.parse(rawText) as PersistedRemoteBundleFile & {
+    manifest?: { slug?: unknown };
+  };
+
+  if (parsed.manifest?.slug !== slug) {
+    throw new Error(`Artifact slug mismatch for ${slug}.`);
+  }
+
+  parsed.registryMeta = {
+    ...(parsed.registryMeta ?? {}),
+    pricingMode: pricing.pricingMode,
+    pricingPlanKind: pricing.pricingPlanKind,
+    priceAmountCents: pricing.priceAmountCents,
+    priceCurrency: pricing.priceCurrency,
+    priceLabel: pricing.priceLabel,
+    purchaseUrl: pricing.purchaseUrl,
+  };
+
+  await writeFile(filePath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  return true;
+}
+
+export async function updateCatalogPluginPricing(input: {
+  state: RegistryRuntimeState;
+  slug: string;
+  pricing: CatalogPricingUpdateInput;
+}) {
+  const catalogIndex = input.state.catalog.findIndex(
+    (entry) => entry.slug === input.slug,
+  );
+  if (catalogIndex < 0) {
+    throw new Error("PLUGIN_NOT_FOUND");
+  }
+
+  const pricingPatch = resolveCatalogPricingPatch(input.pricing);
+  const now = new Date();
+  const current = input.state.catalog[catalogIndex];
+  const nextEntry: CatalogEntry = {
+    ...current,
+    ...pricingPatch,
+    metadata: {
+      ...(current.metadata ?? {}),
+      pricingPlanKind: pricingPatch.pricingPlanKind,
+      priceAmountCents: pricingPatch.priceAmountCents,
+      priceCurrency: pricingPatch.priceCurrency,
+    },
+  };
+
+  input.state.catalog[catalogIndex] = nextEntry;
+
+  for (const [key, bundle] of input.state.demoBundles.entries()) {
+    if (bundle.slug !== input.slug) continue;
+    input.state.demoBundles.set(key, {
+      ...bundle,
+      catalogEntry: {
+        ...bundle.catalogEntry,
+        ...pricingPatch,
+        metadata: {
+          ...(bundle.catalogEntry.metadata ?? {}),
+          pricingPlanKind: pricingPatch.pricingPlanKind,
+          priceAmountCents: pricingPatch.priceAmountCents,
+          priceCurrency: pricingPatch.priceCurrency,
+        },
+      },
+    });
+  }
+
+  for (const [key, record] of input.state.pluginVersions.entries()) {
+    if (record.slug !== input.slug) continue;
+    input.state.pluginVersions.set(key, {
+      ...record,
+      pricingMode: pricingPatch.pricingMode,
+      pricingPlanKind: pricingPatch.pricingPlanKind,
+      priceAmountCents: pricingPatch.priceAmountCents,
+      priceCurrency: pricingPatch.priceCurrency,
+      priceLabel: pricingPatch.priceLabel,
+      purchaseUrl: pricingPatch.purchaseUrl,
+      updatedAt: now,
+    });
+  }
+
+  const artifactUpdated = await persistRemoteBundlePricing(input.slug, pricingPatch);
+  saveRuntimePersistence(input.state);
+
+  return {
+    plugin: nextEntry,
+    artifactUpdated,
+  };
 }
 
 export function createPluginVersionTestSession(input: {

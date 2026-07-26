@@ -43,6 +43,13 @@ enum OnchainDepositStatus {
   IGNORED
 }
 
+enum CtfBillCaptureStatus {
+  RECEIVED
+  MATCHED
+  IGNORED
+  DEAD_LETTER
+}
+
 enum AdminRole {
   SUPER_ADMIN
   OPS_ADMIN
@@ -146,6 +153,7 @@ model Merchant {
   installedPlugins      MerchantInstalledPlugin[]
   pluginPurchaseRecords PluginPurchaseRecord[]
   apiCredentials        MerchantApiCredential[]
+  easypayCredentials    EasyPayCredential[]
   users                 MerchantUser[]
   idempotencyRecords    MerchantIdempotencyRecord[]
 
@@ -190,6 +198,7 @@ model MerchantChannelAccount {
   updatedAt         DateTime               @updatedAt
   bindings          MerchantChannelBinding[]
   onchainDeposits   OnchainDeposit[]
+  ctfBillCaptureEvents CtfBillCaptureEvent[]
   paymentOrders     PaymentOrder[]
   paymentRefunds    PaymentRefund[]
 
@@ -422,6 +431,24 @@ model MerchantApiCredential {
   @@index([merchantId, createdAt])
 }
 
+model EasyPayCredential {
+  id            String    @id @default(cuid())
+  merchantId    String
+  merchant      Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  pid           String    @unique
+  label         String
+  keyCiphertext String
+  keyPreview    String
+  typeMapping   Json
+  enabled       Boolean   @default(true)
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([merchantId, enabled])
+  @@index([merchantId, createdAt])
+}
+
 model MerchantUser {
   id           String           @id @default(cuid())
   merchantId   String
@@ -500,6 +527,7 @@ model PaymentOrder {
   updatedAt            DateTime               @updatedAt
   callbackAttempts     PaymentCallbackAttempt[]
   onchainDeposits      OnchainDeposit[]
+  ctfBillCaptureEvents CtfBillCaptureEvent[]
   refunds              PaymentRefund[]
   ledgerEntries        MerchantLedgerEntry[]
 
@@ -539,6 +567,38 @@ model OnchainDeposit {
   @@index([merchantChannelAccountId, status, observedAt])
   @@index([paymentOrderId, status, observedAt])
   @@index([status, chainCode, observedAt])
+}
+
+model CtfBillCaptureEvent {
+  id                       String                @id @default(cuid())
+  merchantChannelAccountId String?
+  merchantChannelAccount   MerchantChannelAccount? @relation(fields: [merchantChannelAccountId], references: [id], onDelete: SetNull)
+  matchedPaymentOrderId    String?
+  matchedPaymentOrder      PaymentOrder?         @relation(fields: [matchedPaymentOrderId], references: [id], onDelete: SetNull)
+  channelCode              String
+  captureSource            String?
+  externalBillId           String?
+  payerAccount             String?
+  amount                   Decimal               @db.Decimal(18, 2)
+  currency                 String                @default("CNY") @db.VarChar(3)
+  paidAt                   DateTime
+  remark                   String?               @db.Text
+  rawPayload               Json
+  fingerprint              String                @unique
+  status                   CtfBillCaptureStatus   @default(RECEIVED)
+  matchedAt                DateTime?
+  attemptCount             Int                    @default(0)
+  lastAttemptAt            DateTime?
+  nextAttemptAt            DateTime?
+  failureCode              String?
+  failureMessage           String?                @db.Text
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+
+  @@index([merchantChannelAccountId, status, paidAt])
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([matchedPaymentOrderId])
+  @@index([channelCode, amount, paidAt])
 }
 
 model PaymentRefund {

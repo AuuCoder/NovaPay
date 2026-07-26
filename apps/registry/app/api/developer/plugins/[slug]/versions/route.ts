@@ -208,7 +208,12 @@ export async function POST(
         error.code === "RESERVED_SLUG" ? 403 : 409,
       );
     }
-
-    return apiError(request, "UPLOAD_FAILED", 400);
+    console.error(
+      "[registry upload failed]",
+      error instanceof Error ? error.stack ?? error.message : error,
+    );
+    return apiError(request, "UPLOAD_FAILED", 400, {
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 }

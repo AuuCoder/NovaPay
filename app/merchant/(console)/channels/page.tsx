@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ChannelQrImageField } from "@/app/channel-qr-image-field";
 import {
   formatDateTime,
   type SearchParamsInput,
@@ -10,6 +11,7 @@ import {
   buttonClass,
   inputClass,
   panelClass,
+  subtleButtonClass,
   textareaClass,
 } from "@/app/admin/ui";
 import {
@@ -35,6 +37,13 @@ function firstValue(value: string | string[] | undefined) {
 
 function isCopyableChannelConfigKey(fieldName: string) {
   return !/(key|secret|private|password|cert)/i.test(fieldName);
+}
+
+const receiptListenerChannelCodes = new Set(["ctf.alipay.monitor", "ctf.wxpay.monitor"]);
+const receiptListenerApkUrl = "/downloads/novapay-receipt-listener.apk";
+
+function isReceiptListenerChannel(channelCode: string) {
+  return receiptListenerChannelCodes.has(channelCode);
 }
 
 export default async function MerchantChannelsPage({
@@ -158,6 +167,13 @@ export default async function MerchantChannelsPage({
             "Copy the values usually needed by upstream payment operations and internal handoff. Sensitive credential material remains masked and cannot be exported from the console.",
           instanceIdLabel: "Instance ID",
           channelCodeLabel: "Channel Code",
+          listenerEndpointLabel: "Receipt Event Upload URL",
+          listenerAppTitle: "Android listener app",
+          listenerAppDesc:
+            "Install the NovaPay Android listener app on the phone that receives payment notifications, then paste the upload URL above into the app to start reporting receipt events automatically.",
+          listenerAppDownload: "Download APK",
+          listenerAppInstallHint:
+            "After installation, grant notification access and battery keep-alive permissions. For this channel, using the full upload URL is recommended over filling the route manually.",
           copyConfigHint:
             "Only non-sensitive configured fields are exposed for copying here. Private keys, platform public keys, and similar secrets stay masked.",
         }
@@ -220,6 +236,13 @@ export default async function MerchantChannelsPage({
             "这里集中放当前通道实例联调最常用的参数，便于直接复制给技术或运维。私钥、公钥、API v3 Key 等敏感值继续保持脱敏，不支持从控制台导出。",
           instanceIdLabel: "实例 ID",
           channelCodeLabel: "通道编码",
+          listenerEndpointLabel: "收款事件上报地址",
+          listenerAppTitle: "Android 监听端",
+          listenerAppDesc:
+            "把 NovaPay Android 监听端安装到实际接收收款通知的手机上，再将上方上报地址直接粘贴进 App，即可自动回传到账事件。",
+          listenerAppDownload: "下载 APK",
+          listenerAppInstallHint:
+            "安装后请开启通知读取权限，并允许后台保活。该通道建议直接使用完整上报地址，不必手动拆分实例参数。",
           copyConfigHint:
             "这里只展示可复制的非敏感已配置字段。私钥、公钥等敏感参数仍然只允许重新录入，不支持导出。",
         };
@@ -381,7 +404,7 @@ export default async function MerchantChannelsPage({
             </div>
           ) : null}
 
-          <form action={createMerchantChannelAccountAction} className="mt-6 grid gap-4">
+          <form action={createMerchantChannelAccountAction} encType="multipart/form-data" className="mt-6 grid gap-4">
             <input type="hidden" name="redirectTo" value={selectedChannelHref} />
             <input type="hidden" name="channelCode" value={selectedTemplate.channelCode} />
             <LabeledField label={content.instanceName}>
@@ -398,7 +421,17 @@ export default async function MerchantChannelsPage({
                 label={field.label}
                 hint={field.required ? content.required : content.optional}
               >
-                {field.multiline ? (
+                {field.key === "qrImageUrl" ? (
+                  <ChannelQrImageField
+                    name={`config_${field.key}`}
+                    uploadName={`config_${field.key}_upload`}
+                    removeName={`config_${field.key}_remove`}
+                    placeholder={field.placeholder}
+                    multiline={field.multiline}
+                    inputClassName={inputClass}
+                    textareaClassName={textareaClass}
+                  />
+                ) : field.multiline ? (
                   <textarea
                     name={`config_${field.key}`}
                     placeholder={field.placeholder}
@@ -479,6 +512,7 @@ export default async function MerchantChannelsPage({
             <div className="mt-6 grid gap-6 xl:grid-cols-2">
               {selectedAccounts.map((account) => {
                 const maskedConfig = maskMerchantChannelConfig(account.config) as Record<string, string>;
+                const isReceiptListener = isReceiptListenerChannel(account.channelCode);
                 const hasCallbackRoute = supportsMerchantChannelCallbackRoute(account.channelCode);
                 const callbackUrl = hasCallbackRoute
                   ? buildMerchantChannelCallbackUrl(account.channelCode, account.id, account.callbackToken)
@@ -492,7 +526,7 @@ export default async function MerchantChannelsPage({
                   ? [
                       {
                         id: `${account.id}-callback-url`,
-                        label: content.callbackUrl,
+                        label: isReceiptListener ? content.listenerEndpointLabel : content.callbackUrl,
                         value: callbackUrl ?? "",
                         wide: true,
                       },
@@ -516,11 +550,15 @@ export default async function MerchantChannelsPage({
                     label: content.instanceIdLabel,
                     value: account.id,
                   },
-                  {
-                    id: `${account.id}-channel-code`,
-                    label: content.channelCodeLabel,
-                    value: account.channelCode,
-                  },
+                  ...(isReceiptListener
+                    ? []
+                    : [
+                        {
+                          id: `${account.id}-channel-code`,
+                          label: content.channelCodeLabel,
+                          value: account.channelCode,
+                        } satisfies CopyFieldItem,
+                      ]),
                   ...callbackCopyItems,
                   ...selectedTemplate.fields.flatMap((field) => {
                     const maskedValue = maskedConfig[field.key]?.trim();
@@ -548,6 +586,7 @@ export default async function MerchantChannelsPage({
                   <form
                     key={account.id}
                     action={updateMerchantChannelAccountAction}
+                    encType="multipart/form-data"
                     className="rounded-[1.5rem] border border-line bg-white/75 p-5"
                   >
                     <input type="hidden" name="redirectTo" value={selectedChannelHref} />
@@ -592,6 +631,31 @@ export default async function MerchantChannelsPage({
                       ) : null}
                     </div>
 
+                    {isReceiptListener ? (
+                      <div className="mt-4 rounded-[1.25rem] border border-line bg-white/70 p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-foreground">
+                              {content.listenerAppTitle}
+                            </p>
+                            <p className="mt-2 text-sm leading-7 text-muted">
+                              {content.listenerAppDesc}
+                            </p>
+                          </div>
+                          <Link
+                            href={receiptListenerApkUrl}
+                            className={subtleButtonClass}
+                            download
+                          >
+                            {content.listenerAppDownload}
+                          </Link>
+                        </div>
+                        <p className="mt-3 text-xs leading-6 text-muted">
+                          {content.listenerAppInstallHint}
+                        </p>
+                      </div>
+                    ) : null}
+
                     <div className="mt-5 grid gap-4">
                       {selectedTemplateBlockedByProfile ? (
                         <div className="rounded-[1.25rem] border border-[#f3d1ab] bg-[#fff4e7] p-4 text-sm text-[#8a4d18]">
@@ -614,7 +678,18 @@ export default async function MerchantChannelsPage({
                           label={field.label}
                           hint={field.required ? content.required : content.optional}
                         >
-                          {field.multiline ? (
+                          {field.key === "qrImageUrl" ? (
+                            <ChannelQrImageField
+                              name={`config_${field.key}`}
+                              uploadName={`config_${field.key}_upload`}
+                              removeName={`config_${field.key}_remove`}
+                              defaultValue={maskedConfig[field.key] ?? ""}
+                              placeholder={field.placeholder}
+                              multiline={field.multiline}
+                              inputClassName={inputClass}
+                              textareaClassName={textareaClass}
+                            />
+                          ) : field.multiline ? (
                             <textarea
                               name={`config_${field.key}`}
                               defaultValue={maskedConfig[field.key] ?? ""}

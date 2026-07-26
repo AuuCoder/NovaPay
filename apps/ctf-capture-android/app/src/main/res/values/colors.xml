@@ -1,0 +1,7 @@
+<resources>
+    <color name="ctf_bg">#F5EFE7</color>
+    <color name="ctf_fg">#20160D</color>
+    <color name="ctf_accent">#D96C1F</color>
+    <color name="ctf_secondary">#0D7A62</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

@@ -204,7 +204,7 @@ export function getOpenApiSpec(locale: Locale = "zh") {
             merchantCode: { type: "string" },
             channelCode: {
               type: "string",
-              enum: ["alipay.page", "wxpay.native"],
+              enum: ["alipay.page", "wxpay.native", "ctf.alipay.monitor", "ctf.wxpay.monitor"],
             },
             externalOrderId: { type: "string" },
             amount: { oneOf: [{ type: "string" }, { type: "number" }] },
@@ -233,6 +233,58 @@ export function getOpenApiSpec(locale: Locale = "zh") {
               type: "object",
               additionalProperties: true,
             },
+          },
+        },
+        CtfBillCaptureRequest: {
+          type: "object",
+          required: ["amount"],
+          properties: {
+            channelCode: {
+              type: ["string", "null"],
+              enum: ["ctf.alipay.monitor", "ctf.wxpay.monitor", "alipay", "wxpay", null],
+              description: t(
+                "可选。省略时使用通道实例自己的 channelCode。",
+                "Optional. Defaults to the channelCode of the channel instance.",
+              ),
+            },
+            amount: {
+              oneOf: [{ type: "string" }, { type: "number" }],
+              description: t("账单收款金额。", "Captured bill amount."),
+            },
+            currency: { type: ["string", "null"], default: "CNY" },
+            paidAt: {
+              type: ["string", "number", "null"],
+              description: t(
+                "账单支付时间；支持 ISO 字符串、北京时间 yyyy-MM-dd HH:mm:ss 或 Unix 时间戳。",
+                "Bill payment time; accepts ISO strings, Beijing-time yyyy-MM-dd HH:mm:ss, or Unix epoch.",
+              ),
+            },
+            externalBillId: { type: ["string", "null"] },
+            tradeNo: { type: ["string", "null"] },
+            payerAccount: { type: ["string", "null"] },
+            remark: {
+              type: ["string", "null"],
+              description: t(
+                "账单备注；包含系统订单 ID、商户订单号或商品标题时用于消歧。",
+                "Bill remark; if it contains the NovaPay order id, external order id, or subject, it is used for disambiguation.",
+              ),
+            },
+            source: {
+              type: ["string", "null"],
+              description: t("采集来源，例如 frida-alipay-lab。", "Capture source, e.g. frida-alipay-lab."),
+            },
+          },
+          additionalProperties: true,
+        },
+        CtfBillCaptureResponse: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean" },
+            eventId: { type: "string" },
+            duplicate: { type: "boolean" },
+            matched: { type: "boolean" },
+            matchedPaymentOrderId: { type: ["string", "null"] },
+            status: { type: "string", enum: ["RECEIVED", "MATCHED", "IGNORED"] },
           },
         },
         QueryOrderRequest: {
@@ -872,6 +924,85 @@ export function getOpenApiSpec(locale: Locale = "zh") {
             },
             400: makeErrorResponse(t("微信支付回调参数不合法", "Invalid WeChat Pay callback")),
             404: makeErrorResponse(t("商户通道实例或订单不存在", "Merchant channel account or order not found")),
+          },
+        },
+      },
+      "/api/ctf/bill-capture/{accountId}/{token}": {
+        post: {
+          tags: ["Callbacks"],
+          summary: t("收款监听账单上报", "Receipt listener bill ingest"),
+          description:
+            t(
+              "收款监听端把标准化后的支付宝/微信收款账单 JSON 上报到当前通道实例的专属 URL；NovaPay 入库去重后按通道、金额、时间窗与订单上下文匹配未完成订单，并复用统一订单状态机触发商户业务回调。请求必须在 x-ctf-capture-secret 头中携带通道实例的 collectorSecret。",
+              "A receipt listener agent posts normalized Alipay/WeChat bill JSON to the dedicated URL of the channel instance; NovaPay stores and de-duplicates the event, matches open orders by channel, amount, time window and order context, then reuses the unified order state machine to dispatch merchant callbacks. Every request must send the channel collectorSecret in the x-ctf-capture-secret header.",
+            ),
+          parameters: [
+            {
+              in: "path",
+              name: "accountId",
+              required: true,
+              schema: { type: "string" },
+            },
+            {
+              in: "path",
+              name: "token",
+              required: true,
+              schema: { type: "string" },
+            },
+            {
+              in: "header",
+              name: "x-ctf-capture-secret",
+              required: true,
+              schema: { type: "string" },
+              description: t("通道实例的必填采集端密钥。", "Required collector secret configured on the channel instance."),
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/CtfBillCaptureRequest" },
+                examples: {
+                  alipayHookBill: {
+                    value: {
+                      channelCode: "ctf.alipay.monitor",
+                      amount: "88.00",
+                      paidAt: "2026-06-22 12:30:00",
+                      externalBillId: "ALIPAY-RECEIPT-0001",
+                      payerAccount: "buyer@example.test",
+                      remark: "ORDER-20260622-001",
+                      source: "notif-alipay-listener",
+                    },
+                  },
+                  wxpayMitmBill: {
+                    value: {
+                      channelCode: "ctf.wxpay.monitor",
+                      money: "18.80",
+                      payTime: 1782102600,
+                      tradeNo: "WXPAY-RECEIPT-0001",
+                      nickname: "listener-buyer",
+                      memo: "ORDER-20260622-002",
+                      source: "notif-wechat-listener",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: t("账单事件已接收。matched=true 表示已完成订单匹配。", "Bill event accepted. matched=true means an order was reconciled."),
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/CtfBillCaptureResponse" },
+                },
+              },
+            },
+            400: makeErrorResponse(t("账单载荷不合法", "Invalid bill payload")),
+            401: makeErrorResponse(t("采集端密钥不正确", "Invalid collector secret")),
+            404: makeErrorResponse(t("商户通道实例不存在", "Merchant channel account not found")),
+            409: makeErrorResponse(t("账单通道与通道实例不匹配", "Bill channel does not match the channel instance")),
+            503: makeErrorResponse(t("通道实例未配置采集端密钥", "Collector secret is not configured")),
           },
         },
       },

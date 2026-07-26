@@ -14,6 +14,10 @@ import {
   usdtSolPlugin,
 } from "@/lib/payments/plugins/usdt-onchain";
 import { wxpayNativePlugin } from "@/lib/payments/plugins/wxpay-native";
+import {
+  ctfAlipayBillCapturePlugin,
+  ctfWxpayBillCapturePlugin,
+} from "@/lib/payments/plugins/ctf-bill-capture";
 
 const paymentPlugins: PaymentPluginDefinition[] = [
   alipayPagePlugin,
@@ -21,6 +25,8 @@ const paymentPlugins: PaymentPluginDefinition[] = [
   usdtBscPlugin,
   usdtBasePlugin,
   usdtSolPlugin,
+  ctfAlipayBillCapturePlugin,
+  ctfWxpayBillCapturePlugin,
 ];
 
 const paymentPluginsByCode = new Map<string, PaymentPluginDefinition>(

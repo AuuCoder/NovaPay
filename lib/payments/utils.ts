@@ -55,7 +55,7 @@ export function normalizePem(multilineKey: string, type?: "private" | "public") 
 export function buildSortedParamString(params: Record<string, string>) {
   return Object.entries(params)
     .filter(([, value]) => value !== "")
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([key, value]) => `${key}=${value}`)
     .join("&");
 }

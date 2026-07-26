@@ -47,8 +47,11 @@ test("merchant payment schemas expose fee and net amount fields", () => {
 test("merchant order request forbids public notifyUrl and documents dynamic callbacks", () => {
   const spec = getOpenApiSpec();
   const createOrderSchema = spec.components.schemas.CreateOrderRequest.properties;
+  const ctfSchema = spec.components.schemas.CtfBillCaptureRequest.properties;
 
   assert.equal("notifyUrl" in createOrderSchema, false);
+  assert.ok(ctfSchema.amount);
+  assert.ok(ctfSchema.remark);
   assert.ok(spec.paths["/api/payment-orders"]);
   assert.ok(spec.paths["/api/payment-orders/{orderReference}"]);
   assert.ok(spec.paths["/api/payment-orders/{orderReference}/close"]);
@@ -56,8 +59,10 @@ test("merchant order request forbids public notifyUrl and documents dynamic call
   assert.ok(spec.paths["/api/payment-refunds/{refundReference}"]);
   assert.ok(spec.paths["/api/payments/callback/alipay/{accountId}/{token}"]);
   assert.ok(spec.paths["/api/payments/callback/wxpay/{accountId}/{token}"]);
+  assert.ok(spec.paths["/api/ctf/bill-capture/{accountId}/{token}"]);
   assert.equal("/api/payments/callback/alipay" in spec.paths, false);
   assert.equal("/api/payments/callback/wxpay" in spec.paths, false);
+  assert.equal("/api/ctf/bill-capture" in spec.paths, false);
   assert.equal("/api/payments/orders" in spec.paths, false);
   assert.equal("/api/payments/orders/query" in spec.paths, false);
   assert.equal("/api/payments/orders/close" in spec.paths, false);

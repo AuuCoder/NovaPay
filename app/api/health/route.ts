@@ -30,6 +30,7 @@ export async function GET() {
       },
     });
   } catch (error) {
+    console.error("[health] database check failed:", error);
     return NextResponse.json(
       {
         status: "error",
@@ -37,7 +38,7 @@ export async function GET() {
           configured: true,
           reachable: false,
         },
-        message: error instanceof Error ? error.message : "Unknown database error",
+        message: "Database health check failed.",
       },
       { status: 500 },
     );

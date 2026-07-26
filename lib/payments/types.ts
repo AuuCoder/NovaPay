@@ -93,6 +93,7 @@ export interface PaymentNotification {
   paidAt?: Date | null;
   succeeds: boolean;
   rawPayload: Record<string, unknown>;
+  evidenceKind?: "provider" | "ctf-capture" | "system";
 }
 
 export interface PaymentRefundNotification {

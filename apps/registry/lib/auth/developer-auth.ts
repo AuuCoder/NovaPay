@@ -74,6 +74,7 @@ export interface RegisterResult {
 export type LoginErrorCode =
   | "INVALID_CREDENTIALS"
   | "ACCOUNT_SUSPENDED"
+  | "EMAIL_UNVERIFIED"
   | "ACCOUNT_NOT_FOUND";
 
 export interface LoginResult {
@@ -148,11 +149,14 @@ export async function loginDeveloper(
   if (!developer) {
     return { success: false, errorCode: "ACCOUNT_NOT_FOUND" };
   }
+  if (!verifyPassword(input.password, developer.passwordHash)) {
+    return { success: false, errorCode: "INVALID_CREDENTIALS" };
+  }
   if (developer.status === "SUSPENDED") {
     return { success: false, errorCode: "ACCOUNT_SUSPENDED" };
   }
-  if (!verifyPassword(input.password, developer.passwordHash)) {
-    return { success: false, errorCode: "INVALID_CREDENTIALS" };
+  if (developer.status === "EMAIL_UNVERIFIED") {
+    return { success: false, errorCode: "EMAIL_UNVERIFIED" };
   }
   return { success: true, developer };
 }

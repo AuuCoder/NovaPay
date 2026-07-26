@@ -1,0 +1,13 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.CtfCaptureAndroid" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/ctf_accent</item>
+        <item name="colorPrimaryVariant">@color/ctf_accent</item>
+        <item name="colorSecondary">@color/ctf_secondary</item>
+        <item name="android:statusBarColor">@color/ctf_accent</item>
+        <item name="android:navigationBarColor">@color/ctf_bg</item>
+        <item name="android:windowBackground">@color/ctf_bg</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorOnSecondary">@color/white</item>
+        <item name="android:textColorPrimary">@color/ctf_fg</item>
+    </style>
+</resources>

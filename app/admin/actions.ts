@@ -73,6 +73,11 @@ function getBoolean(formData: FormData, key: string) {
   return formData.get(key) === "on";
 }
 
+function hasUploadedQrImage(formData: FormData) {
+  const value = formData.get("config_qrImageUrl_upload");
+  return typeof File !== "undefined" && value instanceof File && value.size > 0;
+}
+
 function getRedirectTo(formData: FormData, fallback: string) {
   const redirectTo = getString(formData, "redirectTo");
   return redirectTo || fallback;
@@ -643,6 +648,8 @@ export async function createMerchantChannelAccountAsAdminAction(formData: FormDa
     formData,
     merchantId ? `/admin/merchants/${merchantId}` : "/admin/merchants",
   );
+  const qrImageUploaded = hasUploadedQrImage(formData);
+  const qrImageRemoved = getBoolean(formData, "config_qrImageUrl_remove");
 
   try {
     if (!merchantId) {
@@ -677,6 +684,8 @@ export async function createMerchantChannelAccountAsAdminAction(formData: FormDa
         providerKey: template.providerKey,
         callbackToken: account.callbackToken,
         enabled: account.enabled,
+        qrImageUploaded,
+        qrImageRemoved,
       },
     });
     revalidateAdminPaths();
@@ -694,6 +703,8 @@ export async function updateMerchantChannelAccountAsAdminAction(formData: FormDa
     formData,
     merchantId ? `/admin/merchants/${merchantId}` : "/admin/merchants",
   );
+  const qrImageUploaded = hasUploadedQrImage(formData);
+  const qrImageRemoved = getBoolean(formData, "config_qrImageUrl_remove");
 
   try {
     if (!merchantId) {
@@ -728,6 +739,8 @@ export async function updateMerchantChannelAccountAsAdminAction(formData: FormDa
         channelCode: template.channelCode,
         callbackToken: previousCallbackToken,
         enabled: account.enabled,
+        qrImageUploaded,
+        qrImageRemoved,
       },
     });
     revalidateAdminPaths();

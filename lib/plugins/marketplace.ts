@@ -23,11 +23,14 @@ import {
 } from "@/lib/payments/plugins/types";
 import type { PaymentChannelSummary, PaymentProvider } from "@/lib/payments/types";
 import { getPrismaClient } from "@/lib/prisma";
+import { isDevLikeEnv } from "@/lib/env";
+import { safeFetch } from "@/lib/network/safe-fetch";
 
 const PAYMENT_PLUGIN_KIND: MarketplacePluginKind = "PAYMENT_CHANNEL";
 const BUILTIN_PLUGIN_SOURCE: MarketplacePluginSource = "BUILTIN";
 const OFFICIAL_PLUGIN_SLUG_PREFIX = "novapay.";
 const MARKETPLACE_SYNC_INTERVAL_MS = 60_000;
+const MAX_REMOTE_PLUGIN_BUNDLE_BYTES = 5 * 1024 * 1024;
 
 /**
  * Official NovaPay plugins live under the reserved `novapay.*` namespace
@@ -55,6 +58,105 @@ function normalizeBundleRelativePath(value: string) {
   }
 
   return normalized;
+}
+
+function sanitizePluginPathSegment(value: string, label: string) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed || trimmed.includes("..") || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(trimmed)) {
+    throw new Error(`Invalid plugin ${label}: ${value}`);
+  }
+  return trimmed;
+}
+
+/**
+ * Build the on-disk install path from registry-supplied slug/version while
+ * guaranteeing it stays under the plugin install root. This prevents a
+ * malicious catalog entry (e.g. version="../../../etc") from causing an
+ * `rm -rf` or arbitrary file write outside the plugin directory.
+ */
+function resolveContainedInstallPath(slug: string, version: string) {
+  const root = getRuntimePluginInstallRoot();
+  const safeSlug = sanitizePluginPathSegment(slug, "slug");
+  const safeVersion = sanitizePluginPathSegment(version, "version");
+  const installPath = path.join(root, safeSlug, safeVersion);
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(installPath);
+  if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
+    throw new Error("Resolved plugin install path escapes the install root.");
+  }
+  return installPath;
+}
+
+/**
+ * Guard the plugin bundle download URL against SSRF. The download must come
+ * from the same host as the plugin's own registry source, so a spoofed/tampered
+ * catalog entry cannot point the server at an internal address. A localhost dev
+ * registry keeps working (its downloads are localhost too); only cross-host
+ * redirection is blocked.
+ */
+function assertRemotePluginDownloadUrlAllowed(
+  downloadUrl: string,
+  registryBaseUrl: string | null,
+) {
+  let target: URL;
+  try {
+    target = new URL(downloadUrl);
+  } catch {
+    throw new Error("远程插件下载地址无效。");
+  }
+
+  if (target.protocol !== "https:" && target.protocol !== "http:") {
+    throw new Error("远程插件下载地址协议不被允许。");
+  }
+
+  if (registryBaseUrl) {
+    let base: URL | null = null;
+    try {
+      base = new URL(registryBaseUrl);
+    } catch {
+      base = null;
+    }
+    if (base && target.host !== base.host) {
+      throw new Error("远程插件下载地址与注册源主机不一致，已拒绝(防止 SSRF)。");
+    }
+  }
+}
+
+export async function downloadRemotePluginBundle(downloadUrl: string) {
+  const response = isDevLikeEnv()
+    ? await fetch(downloadUrl, {
+        method: "GET",
+        cache: "no-store",
+        redirect: "manual",
+        signal: AbortSignal.timeout(15_000),
+      })
+    : await safeFetch(downloadUrl, {
+        method: "GET",
+        timeoutMs: 15_000,
+        maxResponseBytes: MAX_REMOTE_PLUGIN_BUNDLE_BYTES,
+      });
+
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error("远程插件包下载发生重定向，已拒绝。");
+  }
+  if (!response.ok) {
+    throw new Error(`远程插件包下载失败，状态码 ${response.status}。`);
+  }
+
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (
+    Number.isFinite(declaredLength) &&
+    declaredLength > MAX_REMOTE_PLUGIN_BUNDLE_BYTES
+  ) {
+    throw new Error("远程插件包超过 5 MiB 大小限制。");
+  }
+
+  const payload = await response.arrayBuffer();
+  if (payload.byteLength > MAX_REMOTE_PLUGIN_BUNDLE_BYTES) {
+    throw new Error("远程插件包超过 5 MiB 大小限制。");
+  }
+
+  return Buffer.from(payload).toString("utf8");
 }
 
 function computeSha256Hex(value: string) {
@@ -957,9 +1059,7 @@ async function listMerchantEnabledPaymentPluginDefinitions(merchantId: string) {
         return null;
       }
 
-      return (
-        remoteDefinitions.get(row.plugin.channelCode)?.inspection.definition ?? null
-      );
+      return remoteDefinitions.get(row.plugin.channelCode)?.inspection.definition ?? null;
     })
     .filter((plugin): plugin is PaymentPluginDefinition => Boolean(plugin));
 }
@@ -1175,7 +1275,7 @@ async function recordInstallFailure(
   version: string,
   loadError: string,
 ) {
-  const installPath = path.join(getRuntimePluginInstallRoot(), plugin.slug, version);
+  const installPath = resolveContainedInstallPath(plugin.slug, version);
   await prisma.pluginPackageInstall.create({
     data: {
       pluginSlug: plugin.slug,
@@ -1238,17 +1338,18 @@ export async function installRemoteMarketplacePluginPackage(slug: string) {
 
   const version = plugin.latestVersion ?? plugin.version;
 
-  const response = await fetch(plugin.downloadUrl, {
-    method: "GET",
-    cache: "no-store",
-    signal: AbortSignal.timeout(15_000),
-  });
+  const downloadRegistrySource = plugin.registrySourceId
+    ? await getPrismaClient().pluginRegistrySource.findUnique({
+        where: { id: plugin.registrySourceId },
+        select: { baseUrl: true },
+      })
+    : null;
+  assertRemotePluginDownloadUrlAllowed(
+    plugin.downloadUrl,
+    downloadRegistrySource?.baseUrl ?? null,
+  );
 
-  if (!response.ok) {
-    throw new Error(`远程插件包下载失败，状态码 ${response.status}。`);
-  }
-
-  const rawPayload = await response.text();
+  const rawPayload = await downloadRemotePluginBundle(plugin.downloadUrl);
   try {
     if (!plugin.checksum) {
       throw new Error("远程签名插件缺少 checksum，拒绝安装。");
@@ -1269,6 +1370,10 @@ export async function installRemoteMarketplacePluginPackage(slug: string) {
         })
       : null;
 
+    const allowUnsignedPlugins = /^(1|true|yes)$/i.test(
+      process.env.NOVAPAY_ALLOW_UNSIGNED_PLUGINS?.trim() ?? "",
+    );
+
     if (registrySource?.trustPublicKey) {
       const { verifyEd25519Signature } = await import("@/lib/plugins/signature-verify");
       const verifyResult = verifyEd25519Signature({
@@ -1280,10 +1385,17 @@ export async function installRemoteMarketplacePluginPackage(slug: string) {
       if (!verifyResult.valid) {
         throw new Error(`远程插件包签名校验失败：${verifyResult.errorCode}`);
       }
+    } else if (!allowUnsignedPlugins) {
+      // Fail closed: without a configured trust anchor we cannot verify the
+      // Ed25519 signature, so refuse to install rather than trusting a
+      // registry-supplied (checksum-only) bundle that could carry RCE.
+      throw new Error(
+        "远程插件源未配置信任公钥(trustPublicKey)，已拒绝安装未验签插件包。如确需在受控环境放行，请设置 NOVAPAY_ALLOW_UNSIGNED_PLUGINS=1。",
+      );
     }
 
     const bundle = parseRemotePluginPackageBundle(rawPayload);
-    const installPath = path.join(getRuntimePluginInstallRoot(), plugin.slug, version);
+    const installPath = resolveContainedInstallPath(plugin.slug, version);
 
     await rm(installPath, { recursive: true, force: true });
     await mkdir(installPath, { recursive: true });

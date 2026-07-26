@@ -6,6 +6,7 @@ import { calculatePaymentFeeSnapshot } from "@/lib/finance/calculations";
 import { syncPaymentOrderLedgerEntries } from "@/lib/finance/ledger";
 import { getMerchantProfileMissingFieldsForChannel } from "@/lib/merchant-profile-completion";
 import {
+  isCtfBillCaptureChannelCode,
   isUsdtPaymentChannelCode,
   normalizePaymentChannelCode,
 } from "@/lib/payments/channel-codes";
@@ -28,6 +29,7 @@ import {
 } from "@/lib/orders/status";
 import { getSystemConfig } from "@/lib/system-config";
 import { isRecord } from "@/lib/payments/utils";
+import { isDevLikeEnv } from "@/lib/env";
 
 const paymentOrderDetailInclude = {
   merchant: true,
@@ -121,6 +123,17 @@ function getQuotedPaymentFields(value: Record<string, unknown> | null | undefine
       ? new Date(value.quoteExpiresAt)
       : null;
 
+  if (
+    payableAmount === null &&
+    payableCurrency === null &&
+    quoteRate === null &&
+    quoteSource === null &&
+    quoteSpreadBps === null &&
+    quoteExpiresAt === null
+  ) {
+    return {};
+  }
+
   return {
     payableAmount,
     payableCurrency,
@@ -144,8 +157,41 @@ function getCallbackTarget(order: {
   return order.callbackUrl ?? order.merchant.callbackBase;
 }
 
-function assertAmountMatches(expected: { toString(): string }, actual?: string) {
+export function assertPaymentNotificationAmountMatches(
+  expected: { toString(): string },
+  actual?: string,
+  options?: { requireAmount?: boolean },
+) {
   if (!actual) {
+    if (options?.requireAmount) {
+      const configured =
+        process.env.NOVAPAY_REQUIRE_NOTIFICATION_AMOUNT?.trim() ?? "";
+      let enforce = !isDevLikeEnv();
+
+      if (/^(1|true|yes)$/i.test(configured)) {
+        enforce = true;
+      } else if (/^(0|false|no)$/i.test(configured)) {
+        enforce = false;
+      } else if (configured) {
+        throw new AppError(
+          "AMOUNT_VALIDATION_CONFIG_INVALID",
+          "NOVAPAY_REQUIRE_NOTIFICATION_AMOUNT must be a boolean value.",
+          500,
+        );
+      }
+
+      if (enforce) {
+        throw new AppError(
+          "AMOUNT_REQUIRED",
+          "Notification amount is required to confirm this payment.",
+          400,
+        );
+      }
+      console.warn(
+        "[orders] payment confirmed without a notification amount; amount check skipped. " +
+          "NOVAPAY_REQUIRE_NOTIFICATION_AMOUNT=0 compatibility mode is active.",
+      );
+    }
     return;
   }
 
@@ -159,6 +205,61 @@ function assertAmountMatches(expected: { toString(): string }, actual?: string) 
   if (Math.abs(expectedAmount - actualAmount) > 0.01) {
     throw new AppError("AMOUNT_MISMATCH", "Notification amount does not match the order.", 409);
   }
+}
+
+async function allocateCtfPayableAmount(input: {
+  merchantChannelAccountId: string | null | undefined;
+  channelCode: string;
+  currency: string;
+  baseAmount: string;
+}) {
+  if (!input.merchantChannelAccountId || !isCtfBillCaptureChannelCode(input.channelCode)) {
+    return input.baseAmount;
+  }
+
+  const prisma = getPrismaClient();
+  const baseAmount = Number(input.baseAmount);
+  if (!Number.isFinite(baseAmount) || baseAmount <= 0) {
+    return input.baseAmount;
+  }
+
+  const baseCents = Math.round(baseAmount * 100);
+  const activeOrders = await prisma.paymentOrder.findMany({
+    where: {
+      merchantChannelAccountId: input.merchantChannelAccountId,
+      channelCode: input.channelCode,
+      currency: input.currency,
+      status: {
+        in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING],
+      },
+    },
+    select: {
+      amount: true,
+      payableAmount: true,
+    },
+  });
+
+  const usedCents = new Set(
+    activeOrders.map((order) => {
+      const actualAmount = order.payableAmount?.toString() ?? order.amount.toString();
+      return Math.round(Number(actualAmount) * 100);
+    }),
+  );
+
+  // 监听收款通道优先使用原始金额；仅当同通道同金额存在未完成订单时才分配尾差。
+  // 例如 2.00 空闲时仍使用 2.00；被占用时再尝试 2.01、2.02 ...。
+  for (let offset = 0; offset < 100; offset += 1) {
+    const cents = baseCents + offset;
+    if (!usedCents.has(cents)) {
+      return (cents / 100).toFixed(2);
+    }
+  }
+
+  throw new AppError(
+    "CTF_UNIQUE_AMOUNT_EXHAUSTED",
+    `No unique payable amount slot is available for channel ${input.channelCode}.`,
+    409,
+  );
 }
 
 function assertMerchantCanCreateOrders(merchant: { code: string; status: string }) {
@@ -237,6 +338,30 @@ async function loadPaymentOrderById(id: string) {
   });
 }
 
+async function updateMerchantChannelAccountHealth(input: {
+  accountId: string;
+  lastVerifiedAt?: Date;
+  lastErrorMessage?: string | null;
+}) {
+  const prisma = getPrismaClient();
+
+  try {
+    await prisma.merchantChannelAccount.update({
+      where: {
+        id: input.accountId,
+      },
+      data: {
+        ...(input.lastVerifiedAt ? { lastVerifiedAt: input.lastVerifiedAt } : {}),
+        ...(input.lastErrorMessage !== undefined
+          ? { lastErrorMessage: input.lastErrorMessage }
+          : {}),
+      },
+    });
+  } catch {
+    // Health updates must never block order reconciliation.
+  }
+}
+
 async function buildPaymentExpireAt(channelCode: string) {
   if (isUsdtPaymentChannelCode(channelCode)) {
     const quoteTtlRaw = await getSystemConfig("USDT_QUOTE_TTL_SECONDS");
@@ -247,7 +372,10 @@ async function buildPaymentExpireAt(channelCode: string) {
     return new Date(Date.now() + quoteTtlSeconds * 1_000);
   }
 
-  const expireMinutesRaw = await getSystemConfig("PAYMENT_EXPIRE_MINUTES");
+  const expireMinutesRaw = isCtfBillCaptureChannelCode(channelCode)
+    ? (await getSystemConfig("CTF_BILL_ORDER_EXPIRE_MINUTES")) ??
+      (await getSystemConfig("PAYMENT_EXPIRE_MINUTES"))
+    : await getSystemConfig("PAYMENT_EXPIRE_MINUTES");
   const expireMinutes = parsePositiveInteger(
     expireMinutesRaw,
     DEFAULT_PAYMENT_EXPIRE_MINUTES,
@@ -435,14 +563,27 @@ export async function syncPaymentOrderFromProvider(order: MerchantPaymentOrder) 
   }
 
   const providerAccount = await requireMerchantRuntimeAccount(order);
-  const notification = await provider.queryPayment({
-    ...toPaymentOperationInput(order),
-    account: providerAccount,
-  });
+  try {
+    const notification = await provider.queryPayment({
+      ...toPaymentOperationInput(order),
+      account: providerAccount,
+    });
 
-  await applyPaymentNotification(notification);
+    await applyPaymentNotification(notification);
+    await updateMerchantChannelAccountHealth({
+      accountId: providerAccount.id,
+      lastVerifiedAt: new Date(),
+      lastErrorMessage: null,
+    });
 
-  return (await loadPaymentOrderById(order.id)) ?? order;
+    return (await loadPaymentOrderById(order.id)) ?? order;
+  } catch (error) {
+    await updateMerchantChannelAccountHealth({
+      accountId: providerAccount.id,
+      lastErrorMessage: error instanceof Error ? error.message : "Unknown payment query error",
+    });
+    throw error;
+  }
 }
 
 export async function getMerchantPaymentOrder(input: {
@@ -578,6 +719,12 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
     amount: input.amount,
   });
   const providerAccount = route.account;
+  const payableAmount = await allocateCtfPayableAmount({
+    merchantChannelAccountId: providerAccount?.id,
+    channelCode: normalizedChannelCode,
+    currency: input.currency,
+    baseAmount: input.amount,
+  });
   const feeSnapshot = calculatePaymentFeeSnapshot({
     amount: input.amount,
     feeRate: route.feeRate,
@@ -604,6 +751,10 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
       subject: input.subject,
       description: input.description,
       amount: input.amount,
+      payableAmount: payableAmount !== input.amount ? payableAmount : null,
+      payableCurrency: payableAmount !== input.amount ? input.currency : null,
+      quoteSource: payableAmount !== input.amount ? "ctf_tail_amount" : null,
+      quoteExpiresAt: payableAmount !== input.amount ? expireAt : null,
       feeRateSnapshot: feeSnapshot.feeRate,
       feeAmount: feeSnapshot.feeAmount,
       netAmount: feeSnapshot.netAmount,
@@ -621,7 +772,7 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
     const payment = await provider.createPayment({
       orderId: order.id,
       merchant,
-      amount: input.amount,
+      amount: payableAmount,
       currency: input.currency,
       subject: input.subject,
       clientIp: input.clientIp,
@@ -645,6 +796,8 @@ export async function createPaymentOrder(input: CreatePaymentOrderInput) {
         ...getQuotedPaymentFields(payment.providerPayload),
         channelPayload: toJsonValue({
           mode: payment.mode,
+          originalRequestedAmount: input.amount,
+          originalRequestedCurrency: input.currency,
           ...payment.providerPayload,
         }),
       },
@@ -691,7 +844,20 @@ export async function applyPaymentNotification(notification: PaymentNotification
     throw new AppError("ORDER_NOT_FOUND", "order not found", 404);
   }
 
-  assertAmountMatches(order.amount, notification.amount);
+  if (
+    notification.evidenceKind === "ctf-capture" &&
+    !isCtfBillCaptureChannelCode(order.channelCode)
+  ) {
+    throw new AppError(
+      "PAYMENT_EVIDENCE_CHANNEL_MISMATCH",
+      `CTF capture evidence cannot update channel ${order.channelCode}.`,
+      409,
+    );
+  }
+
+  assertPaymentNotificationAmountMatches(order.payableAmount ?? order.amount, notification.amount, {
+    requireAmount: notification.succeeds === true,
+  });
 
   const nextStatus = resolvePaymentStatusFromNotification(
     order.status,
@@ -700,8 +866,16 @@ export async function applyPaymentNotification(notification: PaymentNotification
   );
   const callbackTarget = getCallbackTarget(order);
   const nextPayload = isRecord(order.channelPayload) ? order.channelPayload : {};
+  const shouldForceCallbackForTerminalStatusChange =
+    shouldDispatchMerchantCallback(nextStatus) &&
+    isTerminalPaymentStatus(order.status) &&
+    order.status !== nextStatus &&
+    Boolean(callbackTarget);
   const shouldQueueCallback =
-    shouldDispatchMerchantCallback(nextStatus) && Boolean(callbackTarget);
+    shouldDispatchMerchantCallback(nextStatus) &&
+    Boolean(callbackTarget) &&
+    (order.callbackStatus !== CallbackDeliveryStatus.DELIVERED ||
+      shouldForceCallbackForTerminalStatusChange);
   const now = new Date();
 
   const updatedOrder = await prisma.paymentOrder.update({
@@ -728,16 +902,11 @@ export async function applyPaymentNotification(notification: PaymentNotification
           ? `Provider status: ${notification.providerStatus}`
           : null,
       callbackStatus: shouldQueueCallback
-        ? order.callbackStatus === CallbackDeliveryStatus.DELIVERED
-          ? CallbackDeliveryStatus.DELIVERED
-          : getInitialCallbackStatus(Boolean(callbackTarget))
+        ? getInitialCallbackStatus(Boolean(callbackTarget))
         : callbackTarget
           ? order.callbackStatus
           : CallbackDeliveryStatus.NOT_REQUIRED,
-      nextCallbackAt:
-        shouldQueueCallback && order.callbackStatus !== CallbackDeliveryStatus.DELIVERED
-          ? now
-          : order.nextCallbackAt,
+      nextCallbackAt: shouldQueueCallback ? now : order.nextCallbackAt,
       channelPayload: toJsonValue({
         ...nextPayload,
         notify: notification.rawPayload,

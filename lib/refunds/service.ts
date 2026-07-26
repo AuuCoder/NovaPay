@@ -332,10 +332,6 @@ export async function createMerchantPaymentRefund(input: CreateMerchantPaymentRe
     }
   }
 
-  const reservedAmount = await getReservedRefundAmount(order.id, existingRefund?.id);
-  const availableAmount = toAmountNumber(order.amount) - reservedAmount;
-  assertRefundAmount(input.amount, availableAmount);
-
   const provider = await getInstalledPaymentProvider(order.channelCode);
 
   if (!provider?.createRefund) {
@@ -354,26 +350,59 @@ export async function createMerchantPaymentRefund(input: CreateMerchantPaymentRe
     },
   });
 
-  let refund =
-    existingRefund ??
-    (await prisma.paymentRefund.create({
-      data: {
-        merchantId: order.merchantId,
-        paymentOrderId: order.id,
-        providerAccountId: null,
-        merchantChannelAccountId: order.merchantChannelAccountId,
-        apiCredentialId: input.apiCredentialId ?? null,
-        externalRefundId: input.externalRefundId,
-        amount: input.amount,
-        feeAmount: "0.00",
-        netAmountImpact: formatStoredMoney(input.amount),
-        currency: order.currency,
-        status: PaymentRefundStatus.PENDING,
-        reason: input.reason ?? null,
-        metadata: toJsonValue(input.metadata),
-      },
-      include: paymentRefundDetailInclude,
-    }));
+  // Reserve the refundable balance atomically. Without this, two concurrent
+  // requests with different externalRefundIds could both read reserved=0 and
+  // each pass the cap check (TOCTOU), refunding more than the order amount.
+  // Locking the order row with FOR UPDATE serializes concurrent creations so
+  // the "sum(refunds) <= order.amount" invariant holds.
+  let refund: MerchantPaymentRefund;
+
+  if (existingRefund) {
+    const reservedAmount = await getReservedRefundAmount(order.id, existingRefund.id);
+    const availableAmount = toAmountNumber(order.amount) - reservedAmount;
+    assertRefundAmount(input.amount, availableAmount);
+    refund = existingRefund;
+  } else {
+    refund = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "PaymentOrder" WHERE id = ${order.id} FOR UPDATE`;
+
+      const aggregate = await tx.paymentRefund.aggregate({
+        where: {
+          paymentOrderId: order.id,
+          status: {
+            in: [
+              PaymentRefundStatus.PENDING,
+              PaymentRefundStatus.PROCESSING,
+              PaymentRefundStatus.SUCCEEDED,
+            ],
+          },
+        },
+        _sum: { amount: true },
+      });
+      const reservedAmount = aggregate._sum.amount ? toAmountNumber(aggregate._sum.amount) : 0;
+      const availableAmount = toAmountNumber(order.amount) - reservedAmount;
+      assertRefundAmount(input.amount, availableAmount);
+
+      return tx.paymentRefund.create({
+        data: {
+          merchantId: order.merchantId,
+          paymentOrderId: order.id,
+          providerAccountId: null,
+          merchantChannelAccountId: order.merchantChannelAccountId,
+          apiCredentialId: input.apiCredentialId ?? null,
+          externalRefundId: input.externalRefundId,
+          amount: input.amount,
+          feeAmount: "0.00",
+          netAmountImpact: formatStoredMoney(input.amount),
+          currency: order.currency,
+          status: PaymentRefundStatus.PENDING,
+          reason: input.reason ?? null,
+          metadata: toJsonValue(input.metadata),
+        },
+        include: paymentRefundDetailInclude,
+      });
+    });
+  }
 
   if (existingRefund) {
     refund =

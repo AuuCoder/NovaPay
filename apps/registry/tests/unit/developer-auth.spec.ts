@@ -92,11 +92,12 @@ describe("loginDeveloper", () => {
     const store = createInMemoryDeveloperAuthStore();
     const emailStore = createInMemoryEmailVerificationStore();
 
-    await registerDeveloper(
+    const registered = await registerDeveloper(
       { email: "dev@example.com", password: "securepass123", displayName: "Dev", contact: { phone: "123" } },
       store,
       emailStore,
     );
+    await store.updateStatus(registered.developer!.id, "ACTIVE");
 
     const result = await loginDeveloper({ email: "dev@example.com", password: "securepass123" }, store);
     assert.equal(result.success, true);
@@ -123,6 +124,20 @@ describe("loginDeveloper", () => {
     const result = await loginDeveloper({ email: "nobody@example.com", password: "pass" }, store);
     assert.equal(result.success, false);
     assert.equal(result.errorCode, "ACCOUNT_NOT_FOUND");
+  });
+
+  it("fails while email verification is pending", async () => {
+    const store = createInMemoryDeveloperAuthStore();
+    const emailStore = createInMemoryEmailVerificationStore();
+    await registerDeveloper(
+      { email: "dev@example.com", password: "securepass123", displayName: "Dev", contact: { phone: "123" } },
+      store,
+      emailStore,
+    );
+
+    const result = await loginDeveloper({ email: "dev@example.com", password: "securepass123" }, store);
+    assert.equal(result.success, false);
+    assert.equal(result.errorCode, "EMAIL_UNVERIFIED");
   });
 });
 

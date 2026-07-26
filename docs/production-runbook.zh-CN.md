@@ -6,7 +6,7 @@ NovaPay 单台服务器的标准上线流程。整套系统包括：
 
 - 主站（NovaPay 网关 + 后台 + 托管收银台）
 - 插件市场（Registry，独立 Next.js 服务）
-- 三个后台 worker：callbacks / finance / onchain
+- 五个后台 worker：callbacks / finance / ctf-bill-capture / payment-monitor / onchain
 - Postgres 16（两个数据库：`novapay`、`novapay_registry`）
 - MinIO（S3 兼容对象存储，存插件包）
 
@@ -154,6 +154,7 @@ USDT 通道额外检查：
 - 对应链的 RPC / Token / Mint 是否配置好
 - 是否存在重复的链上收款地址
 - 是否需要启动 `onchain-worker`
+- 如启用 CTF 账单捕获通道，确认 `ctf-bill-capture-worker` 会启动
 
 ---
 
@@ -163,7 +164,7 @@ USDT 通道额外检查：
 docker compose -f deploy/docker-compose.prod.yml up -d
 ```
 
-应该看到 9 个容器都 `Up (healthy)`：
+应该看到 11 个容器都 `Up (healthy)`：
 
 | 容器 | 端口 | 用途 |
 |---|---|---|
@@ -173,6 +174,8 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 | `registry` | 3100 | 插件市场 |
 | `callbacks-worker` | — | 商户业务回调重试 |
 | `finance-worker` | — | 财务流水同步 |
+| `ctf-bill-capture-worker` | — | CTF App 账单捕获匹配 |
+| `payment-monitor-worker` | — | 官方支付宝 / 微信订单监控补单 |
 | `onchain-worker` | — | USDT 链上扫描 |
 | `minio-init` | — | 一次性 bucket 创建 |
 | 反向代理（Caddy/Nginx） | 80/443 | HTTPS 入口 |
@@ -190,8 +193,8 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 3. 浏览器打开 `https://pay.example.com/admin/login`，能用 `ADMIN_BOOTSTRAP_*` 登录
 4. 浏览器打开 `https://pay.example.com/docs`，OpenAPI 文档页可访问
 5. 商户能注册、被审核通过、登录成功
-6. 三个 worker 都在 `docker compose ps` 输出里且 `Up`
-7. 在 admin 后台 `/admin/plugins` 看到 5 个内置插件，状态为「已安装 / 已启用」
+6. 五个 worker 都在 `docker compose ps` 输出里且 `Up`
+7. 在 admin 后台 `/admin/plugins` 看到 7 个内置插件，状态为「已安装 / 已启用」
 
 ---
 
@@ -250,7 +253,42 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 
 ---
 
-## 8. 财务运营
+## 8. CTF 账单捕获实战检查
+
+这一段只用于沙箱 / CTF 个人免签监控收款训练。平台侧接收的是训练端标准化后的 App 账单事件，不是平台统一代收钱包。
+
+1. 给商户安装 `ctf.alipay.monitor` 或 `ctf.wxpay.monitor`。
+2. 创建并启用商户通道实例。可选配置：
+   - `qrPayload`：沙箱收款码内容 / URL
+   - `receiverLabel`：托管收银台展示的收款账户标识
+   - `collectorSecret`：采集端二次密钥
+3. 复制通道实例页面展示的回调 URL，它会指向：
+
+```text
+POST /api/ctf/bill-capture/{accountId}/{token}
+Header: x-ctf-capture-secret: <必填 collectorSecret>
+```
+
+4. 用 CTF 通道创建订单并打开托管收银台。
+5. 让抓包 / Hook 训练端投递标准化账单 JSON，例如：
+
+```json
+{
+  "channelCode": "ctf.alipay.monitor",
+  "amount": "88.00",
+  "paidAt": "2026-06-22 12:30:00",
+  "externalBillId": "CTF-ALIPAY-BILL-0001",
+  "payerAccount": "buyer@example.test",
+  "remark": "ORDER-20260622-001 NovaPay CTF",
+  "source": "frida-alipay-lab"
+}
+```
+
+6. `ctf-bill-capture-worker` 会立即匹配或在下一轮扫描中处理 `RECEIVED` 账单事件。匹配成功后订单变为 `SUCCEEDED`，同步生成财务流水并触发商户业务回调。
+
+---
+
+## 9. 财务运营
 
 财务页提供：
 
@@ -269,7 +307,7 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 
 ---
 
-## 9. 备份与恢复
+## 10. 备份与恢复
 
 ### 9.1 自动备份
 
@@ -314,7 +352,7 @@ docker compose exec -T minio mc mirror --overwrite /backup/minio/ local/novapay-
 
 ---
 
-## 10. 升级流程
+## 11. 升级流程
 
 ```bash
 cd /opt/novapay
@@ -335,13 +373,13 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 
 ---
 
-## 11. 监控与日志
+## 12. 监控与日志
 
 最小必要监控：
 
 - `/api/health` 每分钟 ping 一次
 - `/api/.well-known/trust.json` 每分钟 ping 一次
-- 三个 worker 进程是否在 `docker compose ps` 中保持 `Up`
+- 五个 worker 进程是否在 `docker compose ps` 中保持 `Up`
 - Postgres 容器是否 healthy
 - 磁盘使用率（数据库 + MinIO 数据卷 + 日志）
 
@@ -351,13 +389,15 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 docker compose -f deploy/docker-compose.prod.yml logs -f web
 docker compose -f deploy/docker-compose.prod.yml logs -f registry
 docker compose -f deploy/docker-compose.prod.yml logs -f callbacks-worker
+docker compose -f deploy/docker-compose.prod.yml logs -f ctf-bill-capture-worker
+docker compose -f deploy/docker-compose.prod.yml logs -f payment-monitor-worker
 ```
 
 如果接 ELK / Loki，建议用 docker logging driver 直接转发，避免 `docker logs` 文件膨胀。
 
 ---
 
-## 12. 安全检查清单
+## 13. 安全检查清单
 
 上线前过一遍：
 
@@ -374,7 +414,7 @@ docker compose -f deploy/docker-compose.prod.yml logs -f callbacks-worker
 
 ---
 
-## 13. 故障排查
+## 14. 故障排查
 
 | 症状 | 可能原因 | 排查 |
 |---|---|---|
@@ -382,13 +422,15 @@ docker compose -f deploy/docker-compose.prod.yml logs -f callbacks-worker
 | 创建订单 422 PLUGIN_NOT_INSTALLED | 通道插件未安装/未启用 | `/admin/plugins` 检查插件状态 |
 | 支付完没回来 | 上游 returnUrl 不接受当前域名 | 改用真实 HTTPS 域名，不要用 localhost / xx.localtest.me |
 | 回调没到商户 | `callbacks-worker` 未运行或商户回调返回非 2xx | `docker compose logs callbacks-worker` |
+| 官方支付状态同步滞后 | `payment-monitor-worker` 未运行 / 上游查询接口异常 | `docker compose logs payment-monitor-worker` |
+| CTF 账单已上报但订单未成功 | `ctf-bill-capture-worker` 未运行 / 金额或备注不匹配 / 上报到了错误通道实例 URL | `docker compose logs ctf-bill-capture-worker` 并检查 `CtfBillCaptureEvent` |
 | USDT 不到账 | `onchain-worker` 未运行 / 链 RPC 异常 | `docker compose logs onchain-worker` |
 | 插件下载 403 | MinIO 凭证不对 / bucket 没建 | `mc alias set` + `mc ls local/` 检查 |
 | Registry 启动报「No active signing key」 | 数据库为空或迁移没跑 | 重跑 `migrate-registry`，重启 registry |
 
 ---
 
-## 14. 不要做的事
+## 15. 不要做的事
 
 - 不要在生产用 `db:push` 或 `db:migrate dev`
 - 不要把 `.env` 提交到 git
@@ -396,4 +438,4 @@ docker compose -f deploy/docker-compose.prod.yml logs -f callbacks-worker
 - 不要在 `.env` 里写商户的支付凭证
 - 不要禁用 `secure` cookie（生产必须有 HTTPS）
 - 不要把 `MinIO root` 凭证当成商户使用的 S3 token（生产应该专门为应用层创建受限的 access key）
-- 不要在多副本部署时让两台机器同时跑 `finance-worker` / `onchain-worker`（会重复扣账或重复匹配）
+- 不要在多副本部署时让两台机器同时跑 `finance-worker` / `ctf-bill-capture-worker` / `payment-monitor-worker` / `onchain-worker`（会重复扣账、重复匹配或重复补单）

@@ -1,4 +1,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isDevLikeEnv } from "@/lib/env";
+
+const ALLOWED_SSO_ROLES = new Set([
+  "SUPER_ADMIN",
+  "OPS_ADMIN",
+  "FINANCE_ADMIN",
+  "VIEWER",
+]);
+
+const DEV_REGISTRY_SSO_SECRET = "novapay-registry-dev-sso-secret";
 
 export interface RegistrySsoAdminIdentity {
   id: string;
@@ -19,7 +29,24 @@ interface RegistrySsoTokenPayload {
 const DEFAULT_SSO_TTL_SECONDS = 90;
 
 function getRegistrySsoSecret() {
-  return process.env.REGISTRY_SSO_SECRET?.trim() || "novapay-registry-dev-sso-secret";
+  const configured = process.env.REGISTRY_SSO_SECRET?.trim();
+  if (configured) {
+    if (
+      !isDevLikeEnv() &&
+      (configured.length < 24 || configured === DEV_REGISTRY_SSO_SECRET)
+    ) {
+      throw new Error(
+        "REGISTRY_SSO_SECRET must be a high-entropy secret (>= 24 chars, not the development default).",
+      );
+    }
+    return configured;
+  }
+  if (!isDevLikeEnv()) {
+    throw new Error(
+      "REGISTRY_SSO_SECRET must be set to a high-entropy secret outside NODE_ENV=development/test.",
+    );
+  }
+  return DEV_REGISTRY_SSO_SECRET;
 }
 
 function base64UrlEncode(value: string) {
@@ -75,6 +102,10 @@ export function verifyRegistrySsoToken(token: string): RegistrySsoAdminIdentity 
     const now = Math.floor(Date.now() / 1000);
 
     if (!payload.sub || !payload.email || !payload.name || !payload.role) {
+      return null;
+    }
+
+    if (!ALLOWED_SSO_ROLES.has(payload.role)) {
       return null;
     }
 

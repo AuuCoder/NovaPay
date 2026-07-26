@@ -14,7 +14,7 @@ import {
   normalizeUsdtReceivingAddress,
 } from "@/lib/payments/usdt-address";
 import { getPrismaClient } from "@/lib/prisma";
-import { getSystemConfig } from "@/lib/system-config";
+import { getSystemConfig, setSystemConfigs } from "@/lib/system-config";
 
 const TRANSFER_TOPIC =
   "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -25,6 +25,7 @@ const DEFAULT_EVM_CONFIRMATIONS = 12;
 const DEFAULT_SOL_CONFIRMATIONS = 1;
 const DEFAULT_RPC_TIMEOUT_MS = 10_000;
 const USDT_OUTPUT_SCALE = 6;
+const EVM_SCAN_OVERLAP_BLOCKS = BigInt(12);
 const evmTokenDecimalsCache = new Map<string, number>();
 
 type SupportedChainCode =
@@ -116,6 +117,45 @@ function getStringRecord(value: unknown) {
 
 function toJsonValue(value: Record<string, unknown>) {
   return value as Prisma.InputJsonValue;
+}
+
+function parseBigIntConfig(value: string | null | undefined) {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  try {
+    return BigInt(value.trim());
+  } catch {
+    return null;
+  }
+}
+
+function getEvmScanCursorKey(chainCode: EvmChainCode) {
+  return chainCode === USDT_BSC_CHANNEL_CODE
+    ? "USDT_BSC_SCAN_CURSOR_BLOCK"
+    : "USDT_BASE_SCAN_CURSOR_BLOCK";
+}
+
+async function readEvmScanCursor(chainCode: EvmChainCode) {
+  const storedCursor = parseBigIntConfig(await getSystemConfig(getEvmScanCursorKey(chainCode)));
+
+  if (storedCursor !== null) {
+    return storedCursor;
+  }
+
+  return null;
+}
+
+async function writeEvmScanCursor(chainCode: EvmChainCode, blockNumber: bigint) {
+  await setSystemConfigs([
+    {
+      key: getEvmScanCursorKey(chainCode),
+      value: blockNumber.toString(),
+      group: "onchain",
+      label: `${chainCode.toUpperCase()} scan cursor block`,
+    },
+  ]);
 }
 
 function getAddressFromConfig(account: MerchantChainAccountSnapshot) {
@@ -426,6 +466,7 @@ async function matchDepositToOrder(deposit: {
     orderId: matchedOrder.id,
     gatewayOrderId: deposit.txHash,
     providerStatus: "ONCHAIN_CONFIRMED",
+    amount: deposit.amount.toString(),
     paidAt: deposit.observedAt,
     succeeds: true,
     rawPayload: {
@@ -552,14 +593,17 @@ async function scanEvmChain(input: {
 
   const tokenContract = normalizeEvmAddress(input.tokenContract);
   const decimals = await getEvmTokenDecimals(input.rpcUrl, tokenContract);
+  const lastScannedBlock = await readEvmScanCursor(input.chainCode);
   const fromBlock =
-    safeBlock > BigInt(input.evmLookbackBlocks)
-      ? safeBlock - BigInt(input.evmLookbackBlocks) + BigInt(1)
-      : BigInt(0);
+    lastScannedBlock !== null
+      ? (lastScannedBlock > EVM_SCAN_OVERLAP_BLOCKS
+          ? lastScannedBlock - EVM_SCAN_OVERLAP_BLOCKS + BigInt(1)
+          : BigInt(0))
+      : safeBlock;
   const blockTimestampCache = new Map<string, Date>();
   let detected = 0;
   let matched = 0;
-  let errors = duplicateAccounts.length;
+  let scanErrors = 0;
 
   for (const account of uniqueAccounts) {
     try {
@@ -639,7 +683,7 @@ async function scanEvmChain(input: {
         }
       }
     } catch (error) {
-      errors += 1;
+      scanErrors += 1;
       console.error(
         `[onchain-worker] ${input.chainCode} account ${account.id} scan failed: ${
           error instanceof Error ? error.message : String(error)
@@ -648,12 +692,16 @@ async function scanEvmChain(input: {
     }
   }
 
+  if (scanErrors === 0) {
+    await writeEvmScanCursor(input.chainCode, safeBlock);
+  }
+
   return {
     scannedAccounts: uniqueAccounts.length,
     detected,
     matched,
     skipped: false,
-    errors,
+    errors: duplicateAccounts.length + scanErrors,
   };
 }
 

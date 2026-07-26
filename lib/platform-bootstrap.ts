@@ -414,8 +414,21 @@ async function ensureChannelBinding(input: {
 
 export async function runPlatformBootstrap(
   rawInput: PlatformBootstrapInput,
+  options?: { allowWhenInitialized?: boolean },
 ): Promise<PlatformBootstrapResult> {
   requireAtLeastOneEnabled(rawInput);
+
+  // Bootstrap is a one-time setup operation. Once any administrator exists,
+  // refuse to run unless the caller is explicitly authorized (authenticated
+  // SUPER_ADMIN or the internal service token). This blocks an unauthenticated
+  // request from creating/hijacking a SUPER_ADMIN, overwriting the official
+  // merchant's channel keys, or rotating and leaking the bridge credentials.
+  const existingAdminCount = await getPrismaClient().adminUser.count();
+  if (existingAdminCount > 0 && !options?.allowWhenInitialized) {
+    throw new Error(
+      "Platform is already initialized; bootstrap is disabled. Use an authenticated admin flow.",
+    );
+  }
 
   const input: PlatformBootstrapInput = {
     ...rawInput,

@@ -3,6 +3,16 @@ const CHANNEL_CODE_ALIASES: Record<string, string> = {
 };
 
 export const USDT_BSC_CHANNEL_CODE = "usdt.bsc";
+
+export const CTF_ALIPAY_MONITOR_CHANNEL_CODE = "ctf.alipay.monitor";
+export const CTF_WXPAY_MONITOR_CHANNEL_CODE = "ctf.wxpay.monitor";
+export const CTF_BILL_CAPTURE_PROVIDER_KEY = "ctf-bill-capture";
+
+export const CTF_BILL_CAPTURE_CHANNEL_CODES = [
+  CTF_ALIPAY_MONITOR_CHANNEL_CODE,
+  CTF_WXPAY_MONITOR_CHANNEL_CODE,
+] as const;
+
 export const USDT_BASE_CHANNEL_CODE = "usdt.base";
 export const USDT_SOL_CHANNEL_CODE = "usdt.sol";
 
@@ -35,4 +45,11 @@ export function isUsdtEvmChannelCode(channelCode: string | null | undefined) {
 
 export function isUsdtSolanaChannelCode(channelCode: string | null | undefined) {
   return normalizePaymentChannelCode(channelCode) === USDT_SOL_CHANNEL_CODE;
+}
+
+export function isCtfBillCaptureChannelCode(channelCode: string | null | undefined) {
+  const normalized = normalizePaymentChannelCode(channelCode);
+  return CTF_BILL_CAPTURE_CHANNEL_CODES.includes(
+    normalized as (typeof CTF_BILL_CAPTURE_CHANNEL_CODES)[number],
+  );
 }

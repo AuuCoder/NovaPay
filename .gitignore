@@ -19,6 +19,9 @@
 
 # production
 /build
+/apps/ctf-capture-android/.gradle/
+/apps/ctf-capture-android/app/build/
+/apps/ctf-capture-android/local.properties
 
 # misc
 .DS_Store
@@ -65,9 +68,19 @@ next-env.d.ts
 /uploads
 /storage
 /tmp
+/runtime/uploads/
+/app/uploads/
+/backups/
 
 # registry runtime / dev artifacts
 /.tmp
 /apps/registry/.tmp
 /runtime/plugins
 /artifacts
+
+# local toolchains and incident-response working data
+/.android-sdk/
+/.jdk17/
+/.cache-android-commandlinetools.zip
+/.cache-jdk17.tar.gz
+/forensics/

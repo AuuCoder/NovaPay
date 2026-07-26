@@ -22,6 +22,10 @@ test("merchant channel callback path matches channel type", () => {
     buildMerchantChannelCallbackPath("wxpay.native", "acct_wxpay", "token_b"),
     "/api/payments/callback/wxpay/acct_wxpay/token_b",
   );
+  assert.equal(
+    buildMerchantChannelCallbackPath("ctf.alipay.monitor", "acct_ctf", "token_c"),
+    "/api/ctf/bill-capture/acct_ctf/token_c",
+  );
 });
 
 test("merchant channel callback url uses public base url", () => {

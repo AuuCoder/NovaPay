@@ -11,6 +11,8 @@ import { getCurrentLocale } from "@/lib/i18n-server";
 import { getMerchantDisplayName } from "@/lib/merchant-profile-completion";
 import { getMerchantPaymentOrder } from "@/lib/orders/service";
 import { isTerminalPaymentStatus } from "@/lib/orders/status";
+import { buildEasyPayReturnUrl } from "@/lib/easypay/notify";
+import { isEasyPayOrder } from "@/lib/easypay/order-marker";
 import { isRecord } from "@/lib/payments/utils";
 import { getPrismaClient } from "@/lib/prisma";
 
@@ -77,6 +79,11 @@ export default async function HostedPaymentReturnPage({
   })();
 
   if (order.status === "SUCCEEDED" && order.returnUrl?.trim()) {
+    // 易支付订单:回跳时带上签名参数,让客户端能验签确认支付结果。
+    if (isEasyPayOrder(order.metadata)) {
+      const signedReturnUrl = await buildEasyPayReturnUrl(order);
+      redirect(signedReturnUrl ?? order.returnUrl);
+    }
     redirect(order.returnUrl);
   }
 

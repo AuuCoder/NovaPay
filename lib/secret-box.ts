@@ -78,7 +78,7 @@ export function maskSecret(value: string | null | undefined) {
     return "********";
   }
 
-  return `${value.slice(0, 4)}****${value.slice(-4)}`;
+  return `********${value.slice(-4)}`;
 }
 
 export function maskStoredSecret(value: string | null | undefined) {

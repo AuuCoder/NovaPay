@@ -26,9 +26,9 @@ Sample body:
 
 Behaviour notes:
 
-- Merchants do not need to and must not send `notifyUrl`
+- 商户不需要也不能传 `notifyUrl` (Merchants do not need to and must not send `notifyUrl`)
 - Upstream callback URLs are auto-generated per channel instance
-- Do not put `ALIPAY_*` / `WXPAY_*` credentials into the platform `.env` — manage them inside the merchant channel instance
+- 不要在平台 `.env` 中填写 `ALIPAY_*` / `WXPAY_*` 商户支付参数 (Do not put `ALIPAY_*` / `WXPAY_*` credentials into the platform `.env` — manage them inside the merchant channel instance)
 - Configure the merchant business callback in the profile under "Default callback URL"; per-order overrides go in `callbackUrl`
 - `returnUrl` only controls the browser bounce; if omitted, NovaPay's hosted return page is used
 - The authoritative source of truth is the NovaPay business callback or active polling — never the browser bounce alone
@@ -90,6 +90,51 @@ The merchant channel instance must contain:
 - Merchant certificate serial number
 - API v3 key
 - Platform public key
+
+### CTF App bill capture (`ctf.alipay.monitor` / `ctf.wxpay.monitor`)
+
+These channels are for the CTF no-signature collection drill. The merchant order flow stays the same, but payment success is driven by a normalized App bill event posted by the lab capture agent.
+
+Create the order with one of the CTF channel codes:
+
+```json
+{
+  "merchantCode": "merchant-prod-cn-001",
+  "channelCode": "ctf.alipay.monitor",
+  "externalOrderId": "ORDER-20260622-CTF-001",
+  "amount": "88.00",
+  "subject": "NovaPay CTF bill-capture order"
+}
+```
+
+The channel instance exposes a dedicated ingest URL:
+
+```text
+POST /api/ctf/bill-capture/{accountId}/{token}
+Header: x-ctf-capture-secret: <required collectorSecret>
+```
+
+A lab capture agent can post a normalized bill payload like:
+
+```json
+{
+  "channelCode": "ctf.alipay.monitor",
+  "amount": "88.00",
+  "paidAt": "2026-06-22 12:30:00",
+  "externalBillId": "CTF-ALIPAY-BILL-0001",
+  "payerAccount": "buyer@example.test",
+  "remark": "ORDER-20260622-CTF-001 NovaPay CTF",
+  "source": "frida-alipay-lab"
+}
+```
+
+Matching rules:
+
+1. The bill is de-duplicated by fingerprint
+2. The channel instance and amount must match
+3. `paidAt` must fall inside the configured match window
+4. `remark` is optional, but if present it should include the NovaPay order id, merchant `externalOrderId`, or subject to disambiguate equal-amount orders
+5. `ctf-bill-capture-worker` handles unmatched `RECEIVED` events if they did not match immediately on ingest
 
 ### USDT on-chain (`usdt.bsc` / `usdt.base` / `usdt.sol`)
 
@@ -249,6 +294,7 @@ References:
 - **422 channel not configured** — the merchant has not created a channel instance for the requested `channelCode`
 - **422 channel disabled** — the channel exists but is disabled, or its binding is off
 - **Callback never arrives** — `callbacks-worker` not running / merchant returns non-2xx / firewall drops
+- **CTF bill posted but order not credited** — `ctf-bill-capture-worker` not running / amount or remark mismatch / posted to the wrong channel instance URL
 - **USDT deposit not credited** — `onchain-worker` not running / RPC outage / amount mismatch (must be exact)
 
 For deeper troubleshooting see [`docs/production-runbook.md`](./production-runbook.md).

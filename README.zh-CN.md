@@ -14,8 +14,8 @@ NovaPay 是一个面向正式业务场景的多商户支付网关，自带托管
 - **插件市场（`apps/registry`）** —— 独立的 Next.js 服务，包含免费/收费插件目录、Ed25519 包签名、按实例签发的 JWS 许可证、自带管理员/开发者后台。
 - **沙箱化插件运行时** —— 第三方插件通过 `worker_threads` 沙箱加载，并对 `child_process`、`eval`、文件系统写入等绕过手段做静态扫描。
 - **托管收银台** —— 支付宝、微信 Native、USDT（BSC / Polygon / Solana）的品牌化支付页，带倒计时、状态轮询、锁价应付金额。
-- **运营工具链** —— 管理员看板、商户自助门户、财务流水、退款流程、回调重试 worker、链上匹配 worker、审计日志、OpenAPI 文档。
-- **Docker 原生部署** —— 一条 `docker compose up -d` 起主站、插件市场、三个 worker、Postgres、MinIO。
+- **运营工具链** —— 管理员看板、商户自助门户、财务流水、退款流程、回调重试 worker、CTF 账单捕获 worker、收款监控 worker、链上匹配 worker、审计日志、OpenAPI 文档。
+- **Docker 原生部署** —— 一条 `docker compose up -d` 起主站、插件市场、五个 worker、Postgres、MinIO。
 - **统一北京时间** —— 后台和托管收银台所有时间都按 `Asia/Shanghai` 显示，跟服务器时区无关。
 
 ---
@@ -44,6 +44,8 @@ NovaPay 是一个面向正式业务场景的多商户支付网关，自带托管
        后台 worker：
        ─ callbacks-worker     商户业务回调重试
        ─ finance-worker       流水同步、余额快照、结算
+       ─ ctf-bill-capture-worker CTF App 账单捕获匹配
+       ─ payment-monitor-worker 官方收款订单监控
        ─ onchain-worker       USDT BSC / Polygon / Solana 到账匹配
 ```
 
@@ -52,7 +54,25 @@ NovaPay 是一个面向正式业务场景的多商户支付网关，自带托管
 | 主站 | 支付网关、管理员、商户后台、托管收银台 | `novapay` Postgres |
 | 插件市场 | 商店目录、许可证签发、开发者门户 | `novapay_registry` Postgres + S3 |
 | MinIO / S3 | 已签名插件包存储 | 对象存储 |
-| Worker | 异步重试、财务同步、链上扫描 | 共用 Postgres |
+| Worker | 异步重试、财务同步、账单捕获匹配、官方轮询、链上扫描 | 共用 Postgres |
+
+---
+
+## CTF 账单捕获通道
+
+NovaPay 内置两个只用于沙箱训练的个人免签监控收款通道：
+
+- `ctf.alipay.monitor` —— 支付宝 App 账单捕获训练通道
+- `ctf.wxpay.monitor` —— 微信 App 账单捕获训练通道
+
+商户创建通道实例后，复制系统生成的账单上报 URL，让 CTF 抓包/Hook 训练端投递标准化账单 JSON：
+
+```text
+POST /api/ctf/bill-capture/{accountId}/{token}
+Header: x-ctf-capture-secret: <必填 collectorSecret>
+```
+
+平台会把账单事件入库、按指纹去重，再按通道、金额、时间窗和备注匹配未完成订单。匹配成功后复用 NovaPay 原有订单状态机、财务入账和商户回调链路。
 
 ---
 
@@ -278,6 +298,8 @@ npm run db:studio
 # Worker
 npm run callbacks:worker
 npm run finance:worker
+npm run ctf-bill-capture:worker
+npm run payment-monitor:worker
 npm run onchain:worker
 
 # 一次性版本（适合 cron）

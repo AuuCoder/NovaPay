@@ -12,6 +12,7 @@ import {
   listPluginVersionTestSessions,
 } from "../../../../lib/runtime/state";
 import { isOfficialPluginSlug } from "../../../../lib/plugins/official";
+import { PricingEditor } from "./pricing-editor";
 import { ReviewActions } from "./review-actions";
 import { summarizeVerificationSession } from "../../verification-summary";
 
@@ -64,25 +65,39 @@ export default async function AdminPluginDetailPage({
         </div>
 
         {plugin ? (
-          <div className="grid-3">
-            <div className="stat-card feature">
-              <p className="stat-label">{locale === "en" ? "Channel Code" : "通道编码"}</p>
-              <p className="stat-value" style={{ fontSize: 24 }}>{plugin.channelCode}</p>
-              <p className="text-body-sm text-mute">{plugin.slug}</p>
+          <>
+            <div className="grid-3">
+              <div className="stat-card feature">
+                <p className="stat-label">{locale === "en" ? "Channel Code" : "通道编码"}</p>
+                <p className="stat-value" style={{ fontSize: 24 }}>{plugin.channelCode}</p>
+                <p className="text-body-sm text-mute">{plugin.slug}</p>
+              </div>
+              <div className="stat-card">
+                <p className="stat-label">{locale === "en" ? "Pricing" : "定价"}</p>
+                <p className="stat-value" style={{ fontSize: 24 }}>
+                  {formatRegistryPluginPricing(plugin, locale)}
+                </p>
+                <p className="text-body-sm text-mute">{plugin.vendor}</p>
+              </div>
+              <div className="stat-card">
+                <p className="stat-label">{locale === "en" ? "Public Version" : "公开版本"}</p>
+                <p className="stat-value" style={{ fontSize: 24 }}>{plugin.version}</p>
+                <p className="text-body-sm text-mute">{plugin.packageName}</p>
+              </div>
             </div>
-            <div className="stat-card">
-              <p className="stat-label">{locale === "en" ? "Pricing" : "定价"}</p>
-              <p className="stat-value" style={{ fontSize: 24 }}>
-                {formatRegistryPluginPricing(plugin, locale)}
-              </p>
-              <p className="text-body-sm text-mute">{plugin.vendor}</p>
-            </div>
-            <div className="stat-card">
-              <p className="stat-label">{locale === "en" ? "Public Version" : "公开版本"}</p>
-              <p className="stat-value" style={{ fontSize: 24 }}>{plugin.version}</p>
-              <p className="text-body-sm text-mute">{plugin.packageName}</p>
-            </div>
-          </div>
+
+            <PricingEditor
+              slug={plugin.slug}
+              locale={locale}
+              pricingMode={plugin.pricingMode}
+              pricingPlanKind={plugin.pricingPlanKind}
+              priceAmountCents={plugin.priceAmountCents}
+              priceCurrency={plugin.priceCurrency}
+              priceLabel={plugin.priceLabel}
+              purchaseUrl={plugin.purchaseUrl}
+              formattedPricing={formatRegistryPluginPricing(plugin, locale)}
+            />
+          </>
         ) : null}
 
         <div className="enterprise-panel">

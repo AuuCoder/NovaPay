@@ -134,15 +134,20 @@ services:
       dockerfile: Dockerfile
     env_file:
       - ../.env
+    environment:
+      TRUSTED_CLIENT_IP_HEADER: ${TRUSTED_CLIENT_IP_HEADER:-x-novapay-client-ip}
     command: npm run start
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       # Downloaded REMOTE_SIGNED plugin bundles live under runtime/plugins.
       # Persist + share them so a container rebuild does not wipe installed
       # plugins (PluginPackageInstall rows would otherwise point at missing
       # files, breaking channel template provisioning).
       - novapay-plugin-runtime:/app/runtime/plugins
+      # Persist locally uploaded merchant QR images on the host so they do not
+      # disappear after the web container is rebuilt or recreated.
+      - ../runtime/uploads:/app/public/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -165,9 +170,12 @@ services:
       - ../.env
     command: npm run start
     ports:
-      - "3100:3000"
+      - "127.0.0.1:3100:3000"
     volumes:
-      - ../artifacts:/artifacts:ro
+      # Registry admins can update plugin pricing after publication. Persist
+      # those catalog-facing pricing fields back into the bundle metadata so
+      # catalog prices survive registry container restarts.
+      - ../artifacts:/artifacts
     depends_on:
       postgres:
         condition: service_healthy
@@ -211,6 +219,35 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+
+  payment-monitor-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run payment-monitor:worker
+    volumes:
+      - novapay-plugin-runtime:/app/runtime/plugins
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ctf-bill-capture-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    command: npm run ctf-bill-capture:worker
+    volumes:
+      - novapay-plugin-runtime:/app/runtime/plugins
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["ctf-lab"]
 
   onchain-worker:
     build:

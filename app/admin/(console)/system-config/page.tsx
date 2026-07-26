@@ -375,6 +375,101 @@ function getOnchainSystemConfigSections(locale: Locale): SystemConfigSectionDefi
   ];
 }
 
+function getPaymentMonitorSystemConfigSections(locale: Locale): SystemConfigSectionDefinition[] {
+  const isEn = locale === "en";
+
+  return [
+    {
+      id: "payment-monitor",
+      title: isEn ? "Payment Monitor" : "收款监控",
+      description: isEn
+        ? "Configure the official Alipay / WeChat reconciliation worker that re-polls active payment orders."
+        : "配置官方支付宝 / 微信对账 worker，定期复核仍在进行中的支付订单。",
+      note: isEn
+        ? "Use this to automatically heal missed upstream notifications and keep payment state fresh."
+        : "用于自动补偿漏回调，并保持支付状态尽量最新。",
+      requiredKeys: [],
+      fields: [
+        {
+          key: "PAYMENT_MONITOR_INTERVAL_MS",
+          group: "payments",
+          label: isEn ? "Monitor Interval (ms)" : "监控间隔（毫秒）",
+          hint: isEn
+            ? "Default: 15000. Lower values poll more aggressively but increase upstream API traffic."
+            : "默认值：15000。数值越小，轮询越积极，但上游 API 请求也会更多。",
+          kind: "integer",
+          defaultValue: "15000",
+          placeholder: "15000",
+        },
+        {
+          key: "PAYMENT_MONITOR_BATCH_SIZE",
+          group: "payments",
+          label: isEn ? "Monitor Batch Size" : "监控批量大小",
+          hint: isEn
+            ? "Default: 50. Larger batches scan more active orders per cycle."
+            : "默认值：50。数值越大，每轮扫描的活跃订单越多。",
+          kind: "integer",
+          defaultValue: "50",
+          placeholder: "50",
+        },
+      ],
+    },
+  ];
+}
+
+function getCtfBillCaptureSystemConfigSections(locale: Locale): SystemConfigSectionDefinition[] {
+  const isEn = locale === "en";
+
+  return [
+    {
+      id: "ctf-bill-capture",
+      title: isEn ? "Receipt Listener Matching" : "收款监听匹配",
+      description: isEn
+        ? "Configure the receipt-listener matching worker used by Alipay and WeChat collection listener channels."
+        : "配置支付宝 / 微信收款监听通道使用的账单匹配 worker。",
+      note: isEn
+        ? "Listener agents post normalized receipt JSON to the channel ingest URL; NovaPay matches open orders by amount, channel and time window."
+        : "监听端把标准化收款 JSON 投递到通道上报 URL；NovaPay 按金额、通道和时间窗匹配未完成订单。",
+      requiredKeys: [],
+      fields: [
+        {
+          key: "CTF_BILL_CAPTURE_INTERVAL_MS",
+          group: "payments",
+          label: isEn ? "Capture Match Interval (ms)" : "账单匹配间隔（毫秒）",
+          hint: isEn
+            ? "Default: 10000. Controls the fallback worker scan interval for unmatched bill events."
+            : "默认值：10000。控制未匹配账单事件的兜底 worker 扫描间隔。",
+          kind: "integer",
+          defaultValue: "10000",
+          placeholder: "10000",
+        },
+        {
+          key: "CTF_BILL_CAPTURE_BATCH_SIZE",
+          group: "payments",
+          label: isEn ? "Capture Match Batch Size" : "账单匹配批量大小",
+          hint: isEn
+            ? "Default: 50. Larger batches process more unmatched bill events per cycle."
+            : "默认值：50。数值越大，每轮处理的未匹配账单事件越多。",
+          kind: "integer",
+          defaultValue: "50",
+          placeholder: "50",
+        },
+        {
+          key: "CTF_BILL_CAPTURE_MATCH_WINDOW_MINUTES",
+          group: "payments",
+          label: isEn ? "Capture Match Window (minutes)" : "账单匹配时间窗（分钟）",
+          hint: isEn
+            ? "Default: 30. Bill paidAt may be this far away from the order lifecycle and still match."
+            : "默认值：30。账单 paidAt 与订单生命周期相差不超过该窗口时允许匹配。",
+          kind: "integer",
+          defaultValue: "30",
+          placeholder: "30",
+        },
+      ],
+    },
+  ];
+}
+
 export default async function SystemConfigPage() {
   await requireAdminPermission("system_config:read");
   const prisma = getPrismaClient();
@@ -435,7 +530,11 @@ export default async function SystemConfigPage() {
     orderBy: [{ group: "asc" }, { key: "asc" }],
   });
   const configMap = new Map(configs.map((config) => [config.key, config]));
-  const presetSections = getOnchainSystemConfigSections(locale);
+  const presetSections = [
+    ...getOnchainSystemConfigSections(locale),
+    ...getPaymentMonitorSystemConfigSections(locale),
+    ...getCtfBillCaptureSystemConfigSections(locale),
+  ];
 
   return (
     <div className="space-y-8">

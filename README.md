@@ -14,8 +14,8 @@ It does not act as a single pooled platform wallet. Each merchant manages its ow
 - **Plugin marketplace (`apps/registry`)** — a separate Next.js service that catalogs free and paid payment plugins, signs bundles with Ed25519, issues per-instance licenses (JWS), and ships its own admin/developer console.
 - **Sandboxed plugin runtime** — third-party plugins load through a `worker_threads` sandbox with a static scan against `child_process`, `eval`, file-system writes, and other escape hatches.
 - **Hosted checkout** — branded payment pages for Alipay, WeChat Pay Native, and USDT (BSC / Polygon / Solana) with countdowns, status polling, and quote-locked payable amounts.
-- **Operational tooling** — admin dashboards, merchant self-service, finance ledgers, refund flows, callback retry workers, on-chain matching workers, audit logs, and OpenAPI docs.
-- **Docker-native deployment** — one `docker compose up -d` command launches the main app, plugin registry, three workers, Postgres, and MinIO together.
+- **Operational tooling** — admin dashboards, merchant self-service, finance ledgers, refund flows, callback retry workers, CTF bill-capture workers, payment-monitor workers, on-chain matching workers, audit logs, and OpenAPI docs.
+- **Docker-native deployment** — one `docker compose up -d` command launches the main app, plugin registry, five workers, Postgres, and MinIO together.
 - **Beijing-time consistent UI** — every datetime in the admin/merchant consoles and hosted checkout pages renders in `Asia/Shanghai`, regardless of server timezone.
 
 ---
@@ -44,6 +44,8 @@ It does not act as a single pooled platform wallet. Each merchant manages its ow
        Background workers:
        ─ callbacks-worker     merchant business callback retries
        ─ finance-worker       ledger sync, balance snapshots, settlements
+       ─ ctf-bill-capture-worker sandbox App bill-capture reconciliation
+       ─ payment-monitor-worker official payment order reconciliation
        ─ onchain-worker       USDT BSC / Polygon / Solana deposit matching
 ```
 
@@ -52,7 +54,25 @@ It does not act as a single pooled platform wallet. Each merchant manages its ow
 | Main app | Payment gateway, admin, merchant console, hosted checkout | `novapay` Postgres |
 | Plugin Registry | Marketplace catalog, license issuance, developer portal | `novapay_registry` Postgres + S3 |
 | MinIO / S3 | Signed plugin bundle storage | Object storage |
-| Workers | Async retries, finance sync, on-chain scanning | Shared Postgres |
+| Workers | Async retries, finance sync, bill-capture matching, payment polling, on-chain scanning | Shared Postgres |
+
+---
+
+## CTF bill-capture channels
+
+NovaPay includes two sandbox-only channels for the personal no-signature collection drill:
+
+- `ctf.alipay.monitor` — Alipay App bill-capture training channel
+- `ctf.wxpay.monitor` — WeChat App bill-capture training channel
+
+Create a merchant channel instance, copy its generated bill ingest URL, and let the CTF capture agent post normalized bill JSON to:
+
+```text
+POST /api/ctf/bill-capture/{accountId}/{token}
+Header: x-ctf-capture-secret: <required collectorSecret>
+```
+
+The matcher stores the bill event, de-duplicates by fingerprint, then matches open orders by channel, amount, time window, and remark. A successful match reuses the normal order state machine, ledger sync, and merchant callback flow.
 
 ---
 
@@ -278,6 +298,8 @@ npm run db:studio
 # Workers
 npm run callbacks:worker
 npm run finance:worker
+npm run ctf-bill-capture:worker
+npm run payment-monitor:worker
 npm run onchain:worker
 
 # One-shot variants for cron

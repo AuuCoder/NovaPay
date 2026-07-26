@@ -49,7 +49,7 @@ export default async function DeveloperAuthPage({
             "Sign in with a Registry developer account to manage your own slugs, upload new versions, run self-tests, and submit releases for review.",
           registerTitle: "Create developer account",
           registerBody:
-            "Third-party publishers can self-register here. Ownership is assigned when a slug is uploaded for the first time.",
+            "Third-party publishers can submit an account request here. Publishing remains disabled until the account is verified or approved.",
           ssoTitle: "NovaPay admin SSO",
           ssoBody:
             "Operations and review staff enter governance pages by reusing the authenticated NovaPay main-site admin session. No separate registry admin account is required.",
@@ -71,6 +71,7 @@ export default async function DeveloperAuthPage({
             missing_credentials: "Email and password are required.",
             invalid_credentials: "Invalid developer credentials.",
             account_suspended: "This developer account is suspended.",
+            email_unverified: "This developer account is waiting for verification or approval.",
             email_exists: "This email is already registered.",
             password_too_short: "Password must be at least 8 characters.",
             invalid_email: "Please enter a valid email address.",
@@ -79,6 +80,7 @@ export default async function DeveloperAuthPage({
             sso_token_missing: "The NovaPay SSO token is missing. Please try again.",
             sso_token_invalid: "The NovaPay SSO token is invalid or expired. Please try again.",
             signed_out: "Signed out successfully.",
+            verification_required: "Account request submitted. Wait for verification or administrator approval before signing in.",
           },
         }
       : {
@@ -98,7 +100,7 @@ export default async function DeveloperAuthPage({
             "使用 Registry 开发者账号管理自己的 slug、上传新版本、运行自测并提交审核。",
           registerTitle: "创建开发者账号",
           registerBody:
-            "第三方发布者可以在这里自注册。某个 slug 首次上传成功后，归属会绑定到当前开发者账号。",
+            "第三方发布者可以在这里提交账号申请；完成验证或管理员审核前不能登录或发布。",
           ssoTitle: "NovaPay 管理员 SSO",
           ssoBody:
             "审核与运营人员复用主站后台管理员会话进入治理页面，无需额外创建 Registry 管理员账号。",
@@ -120,6 +122,7 @@ export default async function DeveloperAuthPage({
             missing_credentials: "请输入邮箱和密码。",
             invalid_credentials: "开发者账号或密码不正确。",
             account_suspended: "当前开发者账号已被停用。",
+            email_unverified: "当前开发者账号正在等待验证或管理员审核。",
             email_exists: "该邮箱已被注册。",
             password_too_short: "密码至少需要 8 位。",
             invalid_email: "请输入合法的邮箱地址。",
@@ -128,6 +131,7 @@ export default async function DeveloperAuthPage({
             sso_token_missing: "NovaPay SSO 凭证缺失，请重试。",
             sso_token_invalid: "NovaPay SSO 凭证已失效，请重新发起登录。",
             signed_out: "已成功退出登录。",
+            verification_required: "账号申请已提交，请等待验证或管理员审核后再登录。",
           },
         };
 

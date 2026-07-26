@@ -51,6 +51,10 @@ export function buildMerchantChannelCallbackPath(
 ) {
   const plugin = getPaymentPlugin(channelCode);
 
+  if (plugin?.channelCode === "ctf.alipay.monitor" || plugin?.channelCode === "ctf.wxpay.monitor") {
+    return `/api/ctf/bill-capture/${accountId}/${token}`;
+  }
+
   if (!plugin?.callbacks) {
     throw new Error(`Channel ${channelCode} does not use an upstream callback route.`);
   }

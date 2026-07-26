@@ -3,7 +3,9 @@ import {
   getActiveMerchantChannelTemplate,
   generateMerchantChannelCallbackToken,
 } from "@/lib/merchant-channel-accounts";
+import { removeMerchantQrImage, storeMerchantQrImage } from "@/lib/merchant-qr-storage";
 import { assertMerchantProfileCompleteForChannel } from "@/lib/merchant-profile-completion";
+import { isCtfBillCaptureChannelCode } from "@/lib/payments/channel-codes";
 import type { MerchantChannelTemplate } from "@/lib/payments/plugins/types";
 import { normalizeUsdtReceivingAddress } from "@/lib/payments/usdt-address";
 import { isMerchantPaymentPluginInstalled } from "@/lib/plugins/marketplace";
@@ -11,6 +13,22 @@ import { getPrismaClient } from "@/lib/prisma";
 import { protectProviderConfigForStorage } from "@/lib/provider-account-config";
 
 const PROFILE_PREFIX = "请先完善以下商户资料后再启用该支付通道：";
+const QR_IMAGE_FIELD_KEY = "qrImageUrl";
+const QR_IMAGE_OBJECT_KEY_FIELD_KEY = "qrImageObjectKey";
+
+function assertCollectorSecretConfigured(input: {
+  channelCode: string;
+  config: Record<string, string>;
+  enabled: boolean;
+}) {
+  if (
+    input.enabled &&
+    isCtfBillCaptureChannelCode(input.channelCode) &&
+    !input.config.collectorSecret?.trim()
+  ) {
+    throw new Error("启用收款监听通道前必须配置采集端密钥。");
+  }
+}
 
 function readString(formData: FormData, key: string) {
   const value = formData.get(key);
@@ -33,6 +51,19 @@ function readRequiredString(formData: FormData, key: string, label: string) {
 
 function readBoolean(formData: FormData, key: string) {
   return formData.get(key) === "on";
+}
+
+function isFileLike(value: FormDataEntryValue | null): value is File {
+  return typeof File !== "undefined" && value instanceof File;
+}
+
+function getStoredConfigString(config: unknown, key: string) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return "";
+  }
+
+  const value = (config as Record<string, unknown>)[key];
+  return typeof value === "string" ? value.trim() : "";
 }
 
 async function getMerchantChannelTemplateOrThrow(merchantId: string, channelCode: string) {
@@ -119,9 +150,12 @@ async function readMerchantChannelConfig(
   merchantId: string,
   channelCode: string,
   formData: FormData,
+  existingConfig?: unknown,
 ): Promise<{ template: MerchantChannelTemplate; config: Record<string, string> }> {
   const template = await getMerchantChannelTemplateOrThrow(merchantId, channelCode);
   const config: Record<string, string> = {};
+  const previousQrImageUrl = getStoredConfigString(existingConfig, QR_IMAGE_FIELD_KEY);
+  const previousQrImageObjectKey = getStoredConfigString(existingConfig, QR_IMAGE_OBJECT_KEY_FIELD_KEY);
 
   for (const field of template.fields) {
     const value = readString(formData, `config_${field.key}`);
@@ -131,6 +165,45 @@ async function readMerchantChannelConfig(
     }
 
     config[field.key] = value;
+  }
+
+  const qrImageUpload = formData.get(`config_${QR_IMAGE_FIELD_KEY}_upload`);
+  const qrImageRemoveRequested = readBoolean(formData, `config_${QR_IMAGE_FIELD_KEY}_remove`);
+  const manualQrImageValue = config[QR_IMAGE_FIELD_KEY]?.trim() ?? "";
+
+  if (qrImageRemoveRequested && previousQrImageUrl) {
+    await removeMerchantQrImage({
+      qrImageUrl: previousQrImageUrl,
+      qrImageObjectKey: previousQrImageObjectKey,
+    });
+    config[QR_IMAGE_FIELD_KEY] = "";
+    config[QR_IMAGE_OBJECT_KEY_FIELD_KEY] = "";
+  }
+
+  if (isFileLike(qrImageUpload) && qrImageUpload.size > 0) {
+    if (!qrImageUpload.type.startsWith("image/")) {
+      throw new Error("收款码图片必须是图片文件。");
+    }
+    if (previousQrImageUrl || previousQrImageObjectKey) {
+      await removeMerchantQrImage({
+        qrImageUrl: previousQrImageUrl,
+        qrImageObjectKey: previousQrImageObjectKey,
+      });
+    }
+    const uploaded = await storeMerchantQrImage({
+      merchantId,
+      file: qrImageUpload,
+    });
+    config[QR_IMAGE_FIELD_KEY] = uploaded.publicUrl;
+    config[QR_IMAGE_OBJECT_KEY_FIELD_KEY] = uploaded.objectKey ?? "";
+  } else if ((previousQrImageUrl || previousQrImageObjectKey) && manualQrImageValue !== previousQrImageUrl) {
+    await removeMerchantQrImage({
+      qrImageUrl: previousQrImageUrl,
+      qrImageObjectKey: previousQrImageObjectKey,
+    });
+    config[QR_IMAGE_OBJECT_KEY_FIELD_KEY] = "";
+  } else if (previousQrImageObjectKey) {
+    config[QR_IMAGE_OBJECT_KEY_FIELD_KEY] = previousQrImageObjectKey;
   }
 
   if (template.providerKey === "crypto") {
@@ -251,6 +324,12 @@ export async function createMerchantChannelAccountFromForm(input: {
   const displayName = readRequiredString(formData, "displayName", "通道名称");
   const { template, config } = await readMerchantChannelConfig(merchantId, channelCode, formData);
 
+  assertCollectorSecretConfigured({
+    channelCode: template.channelCode,
+    config,
+    enabled: shouldEnable,
+  });
+
   if (template.providerKey === "crypto") {
     await assertUsdtChannelAddressAvailable({
       merchantId,
@@ -353,7 +432,14 @@ export async function updateMerchantChannelAccountFromForm(input: {
     merchantId,
     existing.channelCode,
     formData,
+    existing.config,
   );
+
+  assertCollectorSecretConfigured({
+    channelCode: template.channelCode,
+    config,
+    enabled: requestedEnabled,
+  });
 
   if (template.providerKey === "crypto") {
     await assertUsdtChannelAddressAvailable({
